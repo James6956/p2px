@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P2P.X — Sell USDT for INR</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+  body { background:#0b0e11; color:#eaecef; min-height:100vh; display:flex; flex-direction:column; align-items:center; }
+  header { width:100%; padding:18px 24px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #1e2329; }
+  .logo { font-weight:800; font-size:20px; }
+  .logo span { color:#f0b90b; }
+  .hero { text-align:center; padding:48px 20px 24px; }
+  .hero h1 { font-size:34px; margin-bottom:10px; }
+  .hero h1 em { color:#f0b90b; font-style:normal; }
+  .hero p { color:#848e9c; font-size:15px; }
+  .rates { display:flex; gap:16px; justify-content:center; flex-wrap:wrap; padding:24px 16px; }
+  .card { background:#161a1e; border:1px solid #2b3139; border-radius:14px; padding:24px; width:300px; }
+  .card h2 { font-size:18px; margin-bottom:6px; }
+  .rate { font-size:30px; font-weight:800; color:#f0b90b; margin:8px 0; }
+  .card p { color:#848e9c; font-size:13px; margin-bottom:16px; }
+  button { background:#f0b90b; color:#0b0e11; border:none; border-radius:8px; padding:12px 18px; font-weight:700; font-size:15px; cursor:pointer; width:100%; }
+  button:hover { filter:brightness(1.1); }
+  .steps { max-width:720px; padding:24px 16px 60px; }
+  .steps h3 { text-align:center; margin-bottom:18px; }
+  .steps ol { color:#848e9c; line-height:2; padding-left:20px; font-size:14px; }
+  footer { padding:20px; color:#5a6470; font-size:12px; text-align:center; }
+  .modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); align-items:center; justify-content:center; z-index:10; }
+  .modal.open { display:flex; }
+  .box { background:#161a1e; border:1px solid #2b3139; border-radius:14px; padding:28px; width:92%; max-width:420px; }
+  .box h3 { margin-bottom:14px; }
+  .box label { font-size:13px; color:#848e9c; display:block; margin:12px 0 4px; }
+  .box input { width:100%; background:#0b0e11; border:1px solid #2b3139; border-radius:8px; color:#eaecef; padding:11px 12px; font-size:15px; }
+  .box input:focus { outline:none; border-color:#f0b90b; }
+  .quote { background:#0b0e11; border-radius:8px; padding:10px 12px; margin-top:12px; color:#f0b90b; font-weight:700; display:none; }
+  .err { color:#f87170; font-size:13px; margin-top:8px; display:none; }
+  .wallet { background:#0b0e11; border-radius:8px; padding:10px 12px; margin-top:12px; font-family:monospace; font-size:12px; word-break:break-all; color:#7dd3fc; }
+  .hide { display:none !important; }
+  .ok { text-align:center; padding:20px 0; }
+  .ok h3 { color:#22c55e; margin-bottom:8px; }
+</style>
+</head>
+<body>
+<header><div class="logo">P2P<span>.X</span></div><div style="font-size:13px;color:#848e9c">100% decentralised</div></header>
+
+<section class="hero">
+  <h1>Sell USDT for <em>INR</em></h1>
+  <p>Fast P2P exchanges. Paid to UPI or bank account.</p>
+</section>
+
+<section class="rates">
+  <div class="card">
+    <h2>💵 UPI payout</h2>
+    <div class="rate">100 ₹/$</div>
+    <p>Minimum $5 · money to your UPI within minutes of confirmation</p>
+    <button onclick="openFlow('upi')">Sell at 100rs/$</button>
+  </div>
+  <div class="card">
+    <h2>🏦 CDM deposit</h2>
+    <div class="rate">99 ₹/$</div>
+    <p>Minimum $50.50 (₹5,000) · cash deposit to your bank account</p>
+    <button onclick="openFlow('cdm')">Sell at 99rs/$ (CDM)</button>
+  </div>
+</section>
+
+<section class="steps">
+  <h3>How it works</h3>
+  <ol>
+    <li>Enter the amount you want to sell</li>
+    <li>Send USDT/USDC to our wallet (BEP20, ARB, POL or BASE)</li>
+    <li>Confirm your payment</li>
+    <li>Get rupees to your UPI or bank account</li>
+  </ol>
+</section>
+
+<div class="modal" id="modal">
+  <div class="box">
+    <div id="s1">
+      <h3 id="flowTitle">Sell USDT</h3>
+      <label>Amount in USD</label>
+      <input type="number" id="amount" step="0.01" min="0" placeholder="e.g. 50">
+      <div class="quote" id="quote"></div>
+      <div class="err" id="err1"></div>
+      <label style="margin-top:14px"></label>
+      <button onclick="checkAmount()">Continue</button>
+    </div>
+    <div id="s2" class="hide">
+      <h3>Send crypto</h3>
+      <p style="color:#848e9c;font-size:13px">Send <b id="usdAmt" style="color:#eaecef"></b> (USDT/USDC) to this wallet on <b style="color:#eaecef">BEP20, ARB, POL or BASE</b>:</p>
+      <div class="wallet" id="wallet"></div>
+      <label style="margin-top:14px"></label>
+      <button onclick="confirmPay()">✅ I've sent the payment</button>
+      <button style="background:#2b3139;color:#eaecef;margin-top:8px" onclick="closeModal()">Cancel</button>
+    </div>
+    <div id="s3" class="hide">
+      <h3 id="payTitle">Get paid</h3>
+      <div id="upiFields">
+        <label>Your UPI ID</label>
+        <input type="text" id="upi" placeholder="name@okhdfc">
+      </div>
+      <div id="bankFields" class="hide">
+        <label>Bank account number</label>
+        <input type="text" id="acct" placeholder="9-18 digits">
+        <label>Phone number (linked to account)</label>
+        <input type="text" id="phone" placeholder="10 digits">
+      </div>
+      <div class="err" id="err3"></div>
+      <label style="margin-top:14px"></label>
+      <button onclick="submitOrder()">Submit order</button>
+    </div>
+    <div id="s4" class="hide">
+      <div class="ok">
+        <h3>🎉 Order received!</h3>
+        <p style="color:#848e9c;font-size:14px" id="doneTxt"></p>
+      </div>
+      <button onclick="closeModal()">Done</button>
+    </div>
+  </div>
+</div>
+
+<footer>P2P.X · rates subject to change · trade safely, use a secondary account</footer>
+
+<script>
+const RATE = { upi: 100, cdm: 99 };
+const MIN = { upi: 5, cdm: 50.50 };
+const WALLET = "0xD606DC557199390D8B0c15937e136ea15D4C5FBb";
+let flow = null, amt = 0;
+
+function openFlow(f) {
+  flow = f;
+  amt = 0;
+  document.getElementById('flowTitle').textContent = f === 'upi' ? 'Sell at 100rs/$ (UPI)' : 'Sell at 99rs/$ (CDM)';
+  document.getElementById('upiFields').classList.toggle('hide', f !== 'upi');
+  document.getElementById('bankFields').classList.toggle('hide', f !== 'cdm');
+  show('s1');
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+function show(id) { ['s1','s2','s3','s4'].forEach(s => document.getElementById(s).classList.toggle('hide', s !== id)); }
+
+function checkAmount() {
+  const e = document.getElementById('err1');
+  e.style.display = 'none';
+  const v = parseFloat(document.getElementById('amount').value);
+  if (isNaN(v) || v <= 0) { e.textContent = "Enter a valid amount in USD"; e.style.display = 'block'; return; }
+  if (v < MIN[flow]) {
+    e.textContent = flow === 'cdm' ? "Minimum for CDM is $50.50 (₹5,000)" : "Minimum is $5";
+    e.style.display = 'block'; return;
+  }
+  amt = v;
+  document.getElementById('quote').textContent = "You get: ₹" + Math.round(v * RATE[flow]).toLocaleString('en-IN');
+  document.getElementById('quote').style.display = 'block';
+  document.getElementById('usdAmt').textContent = "$" + v;
+  document.getElementById('wallet').textContent = WALLET;
+  setTimeout(() => show('s2'), 600);
+}
+function confirmPay() { show('s3'); }
+function submitOrder() {
+  const e = document.getElementById('err3');
+  e.style.display = 'none';
+  let payload;
+  if (flow === 'upi') {
+    const upi = document.getElementById('upi').value.trim();
+    if (!/^[a-zA-Z0-9._-]{2,}@[a-zA-Z]{2,}$/.test(upi)) { e.textContent = "Enter a valid UPI ID (name@bank)"; e.style.display = 'block'; return; }
+    payload = { mode: 'upi', amount: amt, upi: upi };
+  } else {
+    const acct = document.getElementById('acct').value.trim();
+    const phone = document.getElementById('phone').value.trim();
+    if (!/^\d{9,18}$/.test(acct)) { e.textContent = "Account number must be 9-18 digits"; e.style.display = 'block'; return; }
+    if (!/^\d{10}$/.test(phone)) { e.textContent = "Enter a valid 10-digit phone number"; e.style.display = 'block'; return; }
+    payload = { mode: 'cdm', amount: amt, account: acct, phone: phone };
+  }
+  fetch('/api/order', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+    .then(r => r.json()).then(res => {
+      if (res.ok) {
+        const inr = "₹" + Math.round(amt * RATE[flow]).toLocaleString('en-IN');
+        document.getElementById('doneTxt').textContent = flow === 'upi'
+          ? "Your " + inr + " will be sent to your UPI shortly. Our team will message you on Telegram to complete the trade."
+          : "Your " + inr + " will be deposited to your bank account via CDM within 30-60 minutes. Our team will message you on Telegram.";
+        show('s4');
+      } else { e.textContent = "Something went wrong, please try again"; e.style.display = 'block'; }
+    })
+    .catch(() => { e.textContent = "Network error, please try again"; e.style.display = 'block'; });
+}
+</script>
+</body>
+</html>

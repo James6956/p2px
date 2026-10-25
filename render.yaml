@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: p2px
+    env: python
+    startCommand: python server.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
