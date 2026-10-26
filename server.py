@@ -1,7 +1,7 @@
 import json, urllib.request, os
 from http.server import BaseHTTPRequestHandler, HTTPServer
-
-TOKEN=os.env...EN", "").strip()
+TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+TOKEN = os.environ["BOT_TOKEN"]
 ADMIN = 1817225234
 RATE = {"upi": 100, "cdm": 99}
 
@@ -12,7 +12,7 @@ def notify(text):
         urllib.request.urlopen(req, timeout=15)
         return True
     except Exception as e:
-        print("notify failed:", e, "toklen=", len(TOKEN), "prefix=", TOKEN[:4], flush=True)
+        print("notify failed:", e, flush=True)
         return False
 
 class H(BaseHTTPRequestHandler):
