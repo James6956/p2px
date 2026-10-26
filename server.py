@@ -95,6 +95,7 @@ WELCOME = ("Welcome to the P2P exchange!\n\n"
 
 
 def bot_loop():
+    global offset
     while True:
         try:
             res = call("getUpdates", offset=offset, timeout=50)
