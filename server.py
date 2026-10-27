@@ -220,7 +220,7 @@ def bot_loop():
                         else:
                             send(chat, "No active order. Tap 💵 Sell to start one.", KB)
                     elif data.startswith("adm_"):
-                        if chat != ADMIN:
+                        if chat not in ADMINS:
                             call("answerCallbackQuery", callback_query_id=cb["id"])
                             continue
                         target = int(data.split(":")[1])
@@ -242,7 +242,7 @@ def bot_loop():
                             else:
                                 send(ADMIN, "No active order for that user.")
                     elif data.startswith("apr:") or data.startswith("rej:"):
-                        if chat != ADMIN:
+                        if chat not in ADMINS:
                             call("answerCallbackQuery", callback_query_id=cb["id"])
                             continue
                         target = int(data.split(":")[1])
