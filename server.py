@@ -196,10 +196,10 @@ def bot_loop():
                             rate = chat_rate.get(chat, 100)
                             if rate == 99:
                                 waiting_acct[chat] = amt
-                                send(chat, "🎉 Payment received! Now enter your bank account number to get paid:")
+                                send(chat, "⏳ Merchant is checking your payment. Now enter your bank account number to get paid:")
                             else:
                                 waiting_upi[chat] = amt
-                                send(chat, "🎉 Payment received! Now enter your UPI ID to get paid (like name@okhdfc):")
+                                send(chat, "⏳ Merchant is checking your payment. Now enter your UPI ID to get paid (like name@okhdfc):")
                         else:
                             send(chat, "No active order. Tap 💵 Sell to start one.", KB)
                     elif data == "cancel":
