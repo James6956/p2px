@@ -2,18 +2,20 @@ import json, urllib.request, os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-ADMIN = 1817225234
+ADMINS = [1817225234, 5538515530]
+ADMIN = ADMINS[0]
 SITE_RATE = {"upi": 100, "cdm": 99}
 
 def notify(text):
-    data = json.dumps({"chat_id": ADMIN, "text": text}).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=data, headers={"Content-Type": "application/json"})
-    try:
-        urllib.request.urlopen(req, timeout=15)
-        return True
-    except Exception as e:
-        print("notify failed:", e, flush=True)
-        return False
+    for cid in ADMINS:
+        data = json.dumps({"chat_id": cid, "text": text}).encode()
+        req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=data, headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=15)
+        except Exception as e:
+            print("notify failed:", e, flush=True)
+            return False
+    return True
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -69,14 +71,16 @@ def call(method, **params):
     return json.loads(urllib.request.urlopen(req, timeout=60).read())
 
 def send(chat_id, text, kb=None):
-    params = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    if kb:
-        params["reply_markup"] = {"inline_keyboard": kb}
-    try:
-        call("sendMessage", **params)
-    except Exception:
-        params.pop("parse_mode", None)
-        call("sendMessage", **params)
+    targets = ADMINS if chat_id in ADMINS else [chat_id]
+    for cid in targets:
+        params = {"chat_id": cid, "text": text, "parse_mode": "Markdown"}
+        if kb:
+            params["reply_markup"] = {"inline_keyboard": kb}
+        try:
+            call("sendMessage", **params)
+        except Exception:
+            params.pop("parse_mode", None)
+            call("sendMessage", **params)
 
 KB = [[
     {"text": "💵 Sell at 100rs/$ (UPI)", "callback_data": "sell"},
