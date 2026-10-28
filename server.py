@@ -70,10 +70,10 @@ def call(method, **params):
     req = urllib.request.Request(f"{API}/{method}", data=data, headers={"Content-Type": "application/json"})
     return json.loads(urllib.request.urlopen(req, timeout=60).read())
 
-def send(chat_id, text, kb=None):
+def send(chat_id, text, kb=None, pm="Markdown"):
     targets = ADMINS if chat_id in ADMINS else [chat_id]
     for cid in targets:
-        params = {"chat_id": cid, "text": text, "parse_mode": "Markdown"}
+        params = {"chat_id": cid, "text": text, "parse_mode": pm}
         if kb:
             params["reply_markup"] = {"inline_keyboard": kb}
         try:
@@ -153,7 +153,7 @@ def bot_loop():
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]]
                         send(chat, f"✅ UPI ID saved: {upi}\n\nYour ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
-                        send(ADMIN, f"💳 UPI FOR PAYOUT ({'CDM' if rate == 99 else 'USDT'})\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nUPI: `{upi}`\nPayout: ₹{amt * rate:,.0f}\n\nSend the rupees now, then tap a button to tell them:", akb)
+                        send(ADMIN, f"💳 UPI FOR PAYOUT ({'CDM' if rate == 99 else 'USDT'})\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nUPI: <code>{upi}</code>\nPayout: ₹{amt * rate:,.0f}\n\nSend the rupees now, then tap a button to tell them:", akb, pm="HTML")
                     elif chat in waiting_amount:
                         try:
                             amt = float(text.replace("$", "").replace(",", ""))
