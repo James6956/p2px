@@ -186,6 +186,10 @@ def bot_loop():
                     name = cb["message"]["chat"].get("first_name", "")
                     username = cb["message"]["chat"].get("username", "no username")
                     data = cb["data"]
+                    actor = cb.get("from", {})
+                    actor_id = actor.get("id", "?")
+                    actor_name = actor.get("first_name", "")
+                    actor_un = actor.get("username", "no username")
                     if data == "sell":
                         waiting_amount.add(chat)
                         chat_rate[chat] = 100
@@ -230,7 +234,7 @@ def bot_loop():
                                 amt, rate = entry
                                 how = "transferred to your account via CDM" if rate == 99 else "sent to your UPI"
                                 send(target, f"🎉 Done! Your ₹{amt * rate:,.0f} has been {how}. Thanks for trading with us!", KB)
-                                send(ADMIN, f"✅ Marked as paid: ₹{amt * rate:,.0f} to user {target}. They've been notified.")
+                                send(ADMIN, f"✅ Marked as paid by {actor_name} (@{actor_un}, id {actor_id}): ₹{amt * rate:,.0f} to user {target}. They've been notified.")
                             else:
                                 send(ADMIN, "No active order for that user.")
                         else:
@@ -238,7 +242,7 @@ def bot_loop():
                             if entry:
                                 amt, rate = entry
                                 send(target, "❌ Your order was cancelled by the team. If you have questions, message the admin.", KB)
-                                send(ADMIN, f"🚫 Marked cancelled: ${amt:g} order from user {target}. They've been notified.")
+                                send(ADMIN, f"🚫 Marked cancelled by {actor_name} (@{actor_un}, id {actor_id}): ${amt:g} order from user {target}. They've been notified.")
                             else:
                                 send(ADMIN, "No active order for that user.")
                     elif data.startswith("apr:") or data.startswith("rej:"):
@@ -258,11 +262,11 @@ def bot_loop():
                             ]]
                             user_pending[target] = amt
                             send(target, f"🎉 Order ACCEPTED! ${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\nNow send ${amt:g} (USDT/USDC) to this wallet (network: BEP20, ARB, POL or BASE):\n`{WALLET}`", kb2)
-                            send(ADMIN, f"✅ Accepted ${amt:g} order from user {target}. Wallet sent to them.")
+                            send(ADMIN, f"✅ {actor_name} (@{actor_un}, id {actor_id}) accepted ${amt:g} order from user {target}. Wallet sent to them.")
                         else:
                             amt, rate = entry
                             send(target, "❌ Your order was rejected by the team. If you think this is a mistake, message the admin.", KB)
-                            send(ADMIN, f"🚫 Rejected ${amt:g} order from user {target}. They've been notified.")
+                            send(ADMIN, f"🚫 {actor_name} (@{actor_un}, id {actor_id}) rejected ${amt:g} order from user {target}. They've been notified.")
                     elif data == "merchant":
                         send(chat, "🏪 Become a merchant or 💰 buy USDT?\n\nBoth are handled personally by our team. Great rates, steady volume and priority support.\n\nTap below to contact the admin directly.", [[
                             {"text": "👤 Contact admin", "url": "https://t.me/Official_p2pX"},
