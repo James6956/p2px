@@ -65,6 +65,8 @@ chat_rate = {}
 pending_approval = {}
 waiting_acct = {}
 waiting_phone = {}
+pay_method = {}
+proof_reply = {}
 
 def call(method, **params):
     data = json.dumps(params).encode()
@@ -142,6 +144,15 @@ def bot_loop():
                             {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]])
+                    elif chat in ADMINS and msg.get("photo") and chat in proof_reply:
+                        dest = proof_reply.pop(chat)
+                        try:
+                            call("sendPhoto", chat_id=dest, photo=msg["photo"][-1]["file_id"], caption="📸 Your payment screenshot proof.")
+                            send(chat, "forwarded ✅")
+                        except Exception as e:
+                            print("proof forward failed:", e, flush=True)
+                            send(chat, "forward failed, try again")
+                        continue
                     elif chat in waiting_upi and msg.get("photo"):
                         amt = waiting_upi.get(chat)
                         rate = chat_rate.get(chat, 100)
@@ -163,6 +174,7 @@ def bot_loop():
                         if ok:
                             waiting_upi.pop(chat, None)
                             active_orders[chat] = (amt, rate)
+                            pay_method[chat] = "qr"
                             send(chat, f"✅ QR received! Your ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
                         continue
                     elif chat in waiting_upi:
@@ -261,8 +273,13 @@ def bot_loop():
                             entry = active_orders.pop(target, None)
                             if entry:
                                 amt, rate = entry
-                                how = "transferred to your account via CDM" if rate == 99 else "sent to your UPI"
-                                send(target, f"🎉 Done! Your ₹{amt * rate:,.0f} has been {how}. Thanks for trading with us!", KB)
+                                how = "transferred to your account via CDM" if rate == 99 else ("sent to your UPI QR" if pay_method.get(target) == "qr" else "sent to your UPI ID")
+                                pay_method.pop(target, None)
+                                pkb = [[
+                                    {"text": "📸 Yes, send proof", "callback_data": "proofyes"},
+                                    {"text": "No, thanks", "callback_data": "proofno"},
+                                ]]
+                                send(target, f"🎉 Done! Your ₹{amt * rate:,.0f} has been {how}. Thanks for trading with us!\n\nWant a screenshot proof of the payment?", pkb)
                                 send(ADMIN, f"✅ Marked as paid by {actor_name} (@{actor_un}, id {actor_id}): ₹{amt * rate:,.0f} to user {target}. They've been notified.")
                             else:
                                 send(ADMIN, "No active order for that user.")
@@ -296,6 +313,20 @@ def bot_loop():
                             amt, rate = entry
                             send(target, "❌ Your order was rejected by the team. If you think this is a mistake, message the admin.", KB)
                             send(ADMIN, f"🚫 {actor_name} (@{actor_un}, id {actor_id}) rejected ${amt:g} order from user {target}. They've been notified.")
+                    elif data == "proofyes":
+                        send(chat, "👍 Sure! Our team will send your screenshot proof here shortly.", KB)
+                        sk = [[
+                            {"text": f"📸 Send proof to {name or 'user'}", "callback_data": f"proofsend:{chat}"},
+                        ]]
+                        send(ADMIN, f"📸 User {name} (@{username}, id {chat}) requested a screenshot proof.\n\nTap the button, then send the photo — it goes straight to them.", sk)
+                    elif data == "proofno":
+                        send(chat, "No problem! Tap 💵 Sell anytime to trade again.", KB)
+                    elif data.startswith("proofsend:"):
+                        if chat not in ADMINS:
+                            call("answerCallbackQuery", callback_query_id=cb["id"])
+                            continue
+                        proof_reply[chat] = int(data.split(":")[1])
+                        send(chat, "Okay, send the proof photo now — I'll forward it to the user.", None)
                     elif data in ("payupi", "payqr"):
                         amt = waiting_upi_choice.pop(chat, None)
                         if amt is None:
