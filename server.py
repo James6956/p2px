@@ -153,7 +153,7 @@ def bot_loop():
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]]
                         send(chat, f"✅ UPI ID saved: {upi}\n\nYour ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
-                        send(ADMIN, f"💳 UPI FOR PAYOUT ({'CDM' if rate == 99 else 'USDT'})\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nUPI: {upi}\nPayout: ₹{amt * rate:,.0f}\n\nSend the rupees now, then tap a button to tell them:", akb)
+                        send(ADMIN, f"💳 UPI FOR PAYOUT ({'CDM' if rate == 99 else 'USDT'})\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nUPI: `{upi}`\nPayout: ₹{amt * rate:,.0f}\n\nSend the rupees now, then tap a button to tell them:", akb)
                     elif chat in waiting_amount:
                         try:
                             amt = float(text.replace("$", "").replace(",", ""))
