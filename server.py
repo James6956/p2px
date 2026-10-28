@@ -58,6 +58,7 @@ MIN_USD = 1
 offset = 0
 waiting_amount = set()
 waiting_upi = {}
+waiting_upi_choice = {}
 active_orders = {}
 user_pending = {}
 chat_rate = {}
@@ -116,6 +117,7 @@ def bot_loop():
                     if text.startswith("/start"):
                         waiting_amount.discard(chat)
                         waiting_upi.pop(chat, None)
+                        waiting_upi_choice.pop(chat, None)
                         waiting_acct.pop(chat, None)
                         waiting_phone.pop(chat, None)
                         send(chat, WELCOME, KB)
@@ -140,6 +142,29 @@ def bot_loop():
                             {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]])
+                    elif chat in waiting_upi and msg.get("photo"):
+                        amt = waiting_upi.get(chat)
+                        rate = chat_rate.get(chat, 100)
+                        file_id = msg["photo"][-1]["file_id"]
+                        caption = (f"📸 UPI QR FROM USER ({'CDM' if rate == 99 else 'USDT'})\n\n{name} (@{username}, id {chat})\n"
+                                   f"Confirmed ${amt:g} order\nPayout: ₹{amt * rate:,.0f}\n\n"
+                                   f"Scan the QR to pay, then tap a button to tell them:")
+                        akb = [[
+                            {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
+                            {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
+                        ]]
+                        ok = True
+                        for cid in ADMINS:
+                            try:
+                                call("sendPhoto", chat_id=cid, photo=file_id, caption=caption, reply_markup={"inline_keyboard": akb})
+                            except Exception as e:
+                                print("qr forward failed:", e, flush=True)
+                                ok = False
+                        if ok:
+                            waiting_upi.pop(chat, None)
+                            active_orders[chat] = (amt, rate)
+                            send(chat, f"✅ QR received! Your ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
+                        continue
                     elif chat in waiting_upi:
                         upi = text.strip()
                         if "@" not in upi or len(upi) < 6 or " " in upi:
@@ -206,8 +231,12 @@ def bot_loop():
                                 waiting_acct[chat] = amt
                                 send(chat, "⏳ Merchant is checking your payment. Now enter your bank account number to get paid:")
                             else:
-                                waiting_upi[chat] = amt
-                                send(chat, "⏳ Merchant is checking your payment. Now enter your UPI ID to get paid (like name@okhdfc):")
+                                waiting_upi_choice[chat] = amt
+                                ck = [[
+                                    {"text": "🔤 UPI ID", "callback_data": "payupi"},
+                                    {"text": "📷 QR", "callback_data": "payqr"},
+                                ]]
+                                send(chat, "⏳ Merchant is checking your payment. How do you want to receive the rupees?", ck)
                         else:
                             send(chat, "No active order. Tap 💵 Sell to start one.", KB)
                     elif data == "cancel":
@@ -267,6 +296,16 @@ def bot_loop():
                             amt, rate = entry
                             send(target, "❌ Your order was rejected by the team. If you think this is a mistake, message the admin.", KB)
                             send(ADMIN, f"🚫 {actor_name} (@{actor_un}, id {actor_id}) rejected ${amt:g} order from user {target}. They've been notified.")
+                    elif data in ("payupi", "payqr"):
+                        amt = waiting_upi_choice.pop(chat, None)
+                        if amt is None:
+                            send(chat, "No pending order. Tap 💵 Sell to start one.", KB)
+                        elif data == "payupi":
+                            waiting_upi[chat] = amt
+                            send(chat, "⏳ Type your UPI ID to get paid (like name@okhdfc):", KB)
+                        else:
+                            waiting_upi[chat] = amt
+                            send(chat, "⏳ Send your UPI QR as a photo:", KB)
                     elif data == "merchant":
                         send(chat, "🏪 Become a merchant or 💰 buy USDT?\n\nBoth are handled personally by our team. Great rates, steady volume and priority support.\n\nTap below to contact the admin directly.", [[
                             {"text": "👤 Contact admin", "url": "https://t.me/Official_p2pX"},
