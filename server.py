@@ -265,21 +265,21 @@ def bot_loop():
                             send(ADMIN, f"🚫 Rejected ${amt:g} order from user {target}. They've been notified.")
                     elif data == "merchant":
                         send(chat, "🏪 Become a merchant or 💰 buy USDT?\n\nBoth are handled personally by our team. Great rates, steady volume and priority support.\n\nTap below to contact the admin directly.", [[
-                            {"text": "👤 Contact admin", "url": "https://t.me/Official_p2pX"},
+                            {"text": "👤 Contact admin", "url": "https://t.me/P2p_dotX/5"},
                         ]])
                     elif data == "help":
                         hkb = [[
                             {"text": "📖 FAQ", "callback_data": "faq"},
                             {"text": "💸 Order confirmed, payment not received", "callback_data": "noreceive"},
                         ],[
-                            {"text": "🛟 Contact customer support", "url": "https://t.me/Official_p2pX"},
+                            {"text": "🛟 Contact customer support", "url": "https://t.me/P2p_dotX/5"},
                         ]]
                         send(chat, "❓ Help — pick a topic:", hkb)
                     elif data == "faq":
                         send(chat, "📖 FAQ\n\nQ: What's the rate?\nA: We buy USD at 100rs per $1.\n\nQ: What's the minimum?\nA: $1.\n\nQ: How do I sell?\nA: Tap 💵 Sell, enter the amount, send USDT to the wallet shown, then tap ✅ Confirm payment and enter your UPI ID.\n\nQ: When do I get my rupees?\nA: After we confirm your USDT on-chain, usually within minutes.\n\nQ: Is my data shared with the government?\nA: No. This is a fully decentralised platform.\n\nQ: Can I ask for screenshot proofs?\nA: Yes, definitely — just ask the admin.\n\nQ: Is my money safe? Any chance of account freeze or lien?\nA: Our merchants are third parties and we have no relation with them, so we can't guarantee anything. Please do your own research.\n\nQ: What if my account gets frozen or liened?\nA: For safety, always use a secondary account when doing P2P with us to protect your main account.\n\nQ: How long does a CDM take?\nA: 30-60 minutes.", KB)
                     elif data == "noreceive":
                         send(chat, "💸 Stuck payment? Sorry about that.\n\nIf you confirmed your payment but haven't received your rupees:\n\n1. Check your USDT transaction is complete on-chain\n2. Make sure your UPI ID was correct\n3. Most payouts land within minutes\n\nIf it's been over 30 minutes, contact support below with your transaction hash.", [[
-                            {"text": "🛟 Contact customer support", "url": "https://t.me/Official_p2pX"},
+                            {"text": "🛟 Contact customer support", "url": "https://t.me/P2p_dotX/5"},
                         ]])
                     call("answerCallbackQuery", callback_query_id=cb["id"])
         except Exception as e:
