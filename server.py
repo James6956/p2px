@@ -265,7 +265,7 @@ def bot_loop():
                             send(ADMIN, f"🚫 Rejected ${amt:g} order from user {target}. They've been notified.")
                     elif data == "merchant":
                         send(chat, "🏪 Become a merchant or 💰 buy USDT?\n\nBoth are handled personally by our team. Great rates, steady volume and priority support.\n\nTap below to contact the admin directly.", [[
-                            {"text": "👤 Contact admin", "url": "https://t.me/P2p_dotX/5"},
+                            {"text": "👤 Contact admin", "url": "https://t.me/Official_p2pX"},
                         ]])
                     elif data == "help":
                         hkb = [[
