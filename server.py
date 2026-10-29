@@ -2,7 +2,7 @@ import json, urllib.request, os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-ADMINS = [1817225234, 5538515530]
+ADMINS = [1817225234, 5538515530, 2025705698]
 ADMIN = ADMINS[0]
 SITE_RATE = {"upi": 100, "cdm": 99}
 
