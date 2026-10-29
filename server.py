@@ -59,6 +59,86 @@ import random, string as _string
 def new_oid():
     return "".join(random.choices(_string.digits, k=6))
 order_ids = {}  # chat -> order id
+
+# ===== on-chain payment verification (Etherscan V2, one free key covers all chains) =====
+import threading as _th
+WALLET_L = WALLET.lower()
+ES_KEY = os.environ.get("ETHERSCAN_KEY", "").strip()
+ES_V2 = "https://api.etherscan.io/v2/api"
+CHAINS = {"bep20": 56, "arb": 42161, "pol": 137, "base": 8453}
+USDT = {
+    "bep20": "0x55d398326f99059ff775485246999027b3197955",
+    "arb":   "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+    "pol":   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+    "base":  "0xfde4c96ca85d4fe8d2136fc38cdbae4fbc2574cd",
+}
+USDC = {
+    "bep20": "0x8ac76a51cc950d9822d68b83fe1c97db239d6c",
+    "arb":   "0x912ce59144191c1204e64559fe8253a0e49e6548",
+    "pol":   "0x3c499c542cef5e3811e1192ce54d1406e970125",
+    "base":  "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+}
+VALID_TOKENS = {}
+for _n, _c in USDT.items():
+    VALID_TOKENS.setdefault(_c.lower(), []).append(_n + " USDT")
+for _n, _c in USDC.items():
+    VALID_TOKENS.setdefault(_c.lower(), []).append(_n + " USDC")
+watch_payments = {}     # chat -> {"amt": float, "started": unix ts, "notified": bool}
+verified_payments = {}  # chat -> result dict
+
+def _get_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "p2px/1.0"})
+    return json.loads(urllib.request.urlopen(req, timeout=25).read())
+
+def check_incoming(amt, since_ts=None):
+    """Find an incoming REAL USDT/USDC transfer to WALLET of >= amt. Returns dict or None."""
+    if not ES_KEY:
+        return None
+    for net, chainid in CHAINS.items():
+        for addr in VALID_TOKENS:
+            url = (f"{ES_V2}?chainid={chainid}&module=account&action=tokentx&contractaddress={addr}"
+                   f"&address={WALLET_L}&page=1&offset=50&sort=desc&apikey={ES_KEY}")
+            try:
+                res = _get_json(url)
+            except Exception:
+                continue
+            rows = res.get("result")
+            if not isinstance(rows, list):
+                continue
+            for tx in rows[:50]:
+                if tx.get("to", "").lower() != WALLET_L:
+                    continue
+                if since_ts and int(tx.get("timeStamp") or 0) < since_ts:
+                    continue
+                dec = int(tx.get("tokenDecimal") or 18)
+                val = int(tx.get("value") or 0) / (10 ** dec)
+                if val + 1e-6 >= amt:
+                    return {"net": net, "amount": val, "tx": tx.get("hash", ""), "token": addr}
+    return None
+
+def payment_watcher():
+    while True:
+        try:
+            if ES_KEY:
+                for chat in list(watch_payments.keys()):
+                    w = watch_payments[chat]
+                    if w.get("notified"):
+                        continue
+                    hit = check_incoming(w["amt"], since_ts=w.get("started"))
+                    if hit:
+                        hit["oid"] = order_ids.get(chat, "")
+                        verified_payments[chat] = hit
+                        w["notified"] = True
+                        notify(f"✅ PAYMENT VERIFIED ON-CHAIN\n\n🧾 Order ID: {hit['oid']}\nUser: {chat}\nAmount: {hit['amount']:g}\nChain: {hit['net'].upper()}\nToken: {hit['token'][:12]}...\nTx: {hit['tx'][:20]}...")
+                    elif time.time() - w["started"] > 3600 and not w.get("warned"):
+                        w["warned"] = True
+                        notify(f"⚠️ No on-chain payment yet\n\n🧾 Order ID: {order_ids.get(chat, '')}\nUser: {chat}\nNothing matching ${w['amt']:g} arrived within 1 hour of confirm. They may not have sent.")
+        except Exception as e:
+            print("watch err:", e, flush=True)
+        time.sleep(120)
+
+_th.Thread(target=payment_watcher, daemon=True).start()
+
 offset = 0
 waiting_amount = set()
 waiting_upi = {}
@@ -245,6 +325,7 @@ def bot_loop():
                         amt = user_pending.pop(chat, None)
                         if amt:
                             rate = chat_rate.get(chat, 100)
+                            watch_payments[chat] = {"amt": amt, "started": int(time.time()), "notified": False}
                             if rate == 99:
                                 waiting_acct[chat] = amt
                                 send(chat, "⏳ Merchant is checking your payment. Now enter your bank account number to get paid:")
