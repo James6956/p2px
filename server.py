@@ -137,7 +137,21 @@ def payment_watcher():
             print("watch err:", e, flush=True)
         time.sleep(120)
 
+def _boot_check():
+    if not ES_KEY:
+        notify("⚠️ payment checker OFFLINE — ETHERSCAN_KEY not set on render. It will silently do nothing until the key is added.")
+        return
+    try:
+        res = _get_json(f"{ES_V2}?chainid=137&module=account&action=tokentx&contractaddress={USDT['pol']}&address={WALLET_L}&page=1&offset=1&sort=desc&apikey={ES_KEY}")
+        if isinstance(res.get("result"), list):
+            notify("✅ payment checker online — key works, watching all 4 chains")
+        else:
+            notify(f"❌ payment checker key problem: {str(res.get('result') or res.get('message'))[:80]}")
+    except Exception as e:
+        notify(f"❌ payment checker error: {str(e)[:80]}")
+
 _th.Thread(target=payment_watcher, daemon=True).start()
+_th.Thread(target=_boot_check, daemon=True).start()
 
 offset = 0
 waiting_amount = set()
