@@ -54,7 +54,7 @@ TOKEN=os.environ.get("BOT_TOKEN","").strip()
 ADMIN = 1817225234
 WALLET = "0xD606DC557199390D8B0c15937e136ea15D4C5FBb"
 API = f"https://api.telegram.org/bot{TOKEN}"
-MIN_USD = 1
+MIN_USD = 0.1
 offset = 0
 waiting_amount = set()
 waiting_upi = {}
@@ -203,7 +203,7 @@ def bot_loop():
                             if rate == 99:
                                 send(chat, "Minimum for CDM is $50.50 (₹5,000). Enter a bigger amount:")
                             else:
-                                send(chat, f"Minimum is ${MIN_USD:.0f}. Enter a bigger amount:")
+                                send(chat, f"Minimum is ${MIN_USD:g}. Enter a bigger amount:")
                             continue
                         waiting_amount.discard(chat)
                         inr = amt * rate
@@ -230,7 +230,7 @@ def bot_loop():
                     if data == "sell":
                         waiting_amount.add(chat)
                         chat_rate[chat] = 100
-                        send(chat, "💵 Great! You'll get 100rs per $1.\n\nHow much USD do you want to sell? (minimum $1)")
+                        send(chat, "💵 Great! You'll get 100rs per $1.\n\nHow much USD do you want to sell? (minimum $0.1)")
                     elif data == "sellcdm":
                         waiting_amount.add(chat)
                         chat_rate[chat] = 99
@@ -350,7 +350,7 @@ def bot_loop():
                         ]]
                         send(chat, "❓ Help — pick a topic:", hkb)
                     elif data == "faq":
-                        send(chat, "📖 FAQ\n\nQ: What's the rate?\nA: We buy USD at 100rs per $1.\n\nQ: What's the minimum?\nA: $1.\n\nQ: How do I sell?\nA: Tap 💵 Sell, enter the amount, send USDT to the wallet shown, then tap ✅ Confirm payment and enter your UPI ID.\n\nQ: When do I get my rupees?\nA: After we confirm your USDT on-chain, usually within minutes.\n\nQ: Is my data shared with the government?\nA: No. This is a fully decentralised platform.\n\nQ: Can I ask for screenshot proofs?\nA: Yes, definitely — just ask the admin.\n\nQ: Is my money safe? Any chance of account freeze or lien?\nA: Our merchants are third parties and we have no relation with them, so we can't guarantee anything. Please do your own research.\n\nQ: What if my account gets frozen or liened?\nA: For safety, always use a secondary account when doing P2P with us to protect your main account.\n\nQ: How long does a CDM take?\nA: 30-60 minutes.", KB)
+                        send(chat, "📖 FAQ\n\nQ: What's the rate?\nA: We buy USD at 100rs per $1.\n\nQ: What's the minimum?\nA: $0.1.\n\nQ: How do I sell?\nA: Tap 💵 Sell, enter the amount, send USDT to the wallet shown, then tap ✅ Confirm payment and enter your UPI ID.\n\nQ: When do I get my rupees?\nA: After we confirm your USDT on-chain, usually within minutes.\n\nQ: Is my data shared with the government?\nA: No. This is a fully decentralised platform.\n\nQ: Can I ask for screenshot proofs?\nA: Yes, definitely — just ask the admin.\n\nQ: Is my money safe? Any chance of account freeze or lien?\nA: Our merchants are third parties and we have no relation with them, so we can't guarantee anything. Please do your own research.\n\nQ: What if my account gets frozen or liened?\nA: For safety, always use a secondary account when doing P2P with us to protect your main account.\n\nQ: How long does a CDM take?\nA: 30-60 minutes.", KB)
                     elif data == "noreceive":
                         send(chat, "💸 Stuck payment? Sorry about that.\n\nIf you confirmed your payment but haven't received your rupees:\n\n1. Check your USDT transaction is complete on-chain\n2. Make sure your UPI ID was correct\n3. Most payouts land within minutes\n\nIf it's been over 30 minutes, contact support below with your transaction hash.", [[
                             {"text": "🛟 Contact customer support", "url": "https://t.me/P2p_dotX/5"},
