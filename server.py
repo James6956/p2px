@@ -91,34 +91,37 @@ def _get_json(url):
     return json.loads(urllib.request.urlopen(req, timeout=25).read())
 
 def check_incoming(amt, since_ts=None):
-    """Find an incoming REAL USDT/USDC transfer to WALLET of >= amt. Returns dict or None."""
-    if not ES_KEY:
-        return None
+    """Find an incoming REAL USDT/USDC transfer to WALLET of >= amt. 1 call per chain."""
     for net, chainid in CHAINS.items():
-        for addr in VALID_TOKENS:
-            url = (f"{ES_V2}?chainid={chainid}&module=account&action=tokentx&contractaddress={addr}"
-                   f"&address={WALLET_L}&page=1&offset=50&sort=desc&apikey={ES_KEY}")
-            try:
-                res = _get_json(url)
-            except Exception:
+        url = (f"{ES_V2}?chainid={chainid}&module=account&action=tokentx"
+               f"&address={WALLET_L}&page=1&offset=100&sort=desc&apikey={ES_KEY}")
+        try:
+            res = _get_json(url)
+        except Exception:
+            continue
+        rows = res.get("result")
+        if not isinstance(rows, list):
+            continue
+        for tx in rows[:100]:
+            if tx.get("to", "").lower() != WALLET_L:
                 continue
-            rows = res.get("result")
-            if not isinstance(rows, list):
+            if tx.get("contractAddress", "").lower() not in VALID_TOKENS:
                 continue
-            for tx in rows[:50]:
-                if tx.get("to", "").lower() != WALLET_L:
-                    continue
-                if since_ts and int(tx.get("timeStamp") or 0) < since_ts:
-                    continue
-                dec = int(tx.get("tokenDecimal") or 18)
-                val = int(tx.get("value") or 0) / (10 ** dec)
-                if val + 1e-6 >= amt:
-                    return {"net": net, "amount": val, "tx": tx.get("hash", ""), "token": addr}
+            if since_ts and int(tx.get("timeStamp") or 0) < since_ts:
+                continue
+            dec = int(tx.get("tokenDecimal") or 18)
+            val = int(tx.get("value") or 0) / (10 ** dec)
+            if val + 1e-6 >= amt:
+                return {"net": net, "amount": val, "tx": tx.get("hash", ""), "token": tx.get("contractAddress", "")}
     return None
 
 def payment_watcher():
     while True:
         try:
+            hour = time.localtime().tm_hour
+            if hour < 8 or hour >= 23:
+                time.sleep(60)
+                continue
             if ES_KEY:
                 for chat in list(watch_payments.keys()):
                     w = watch_payments[chat]
@@ -135,7 +138,7 @@ def payment_watcher():
                         notify(f"⚠️ No on-chain payment yet\n\n🧾 Order ID: {order_ids.get(chat, '')}\nUser: {chat}\nNothing matching ${w['amt']:g} arrived within 1 hour of confirm. They may not have sent.")
         except Exception as e:
             print("watch err:", e, flush=True)
-        time.sleep(120)
+        time.sleep(5)
 
 def _boot_check():
     if not ES_KEY:
