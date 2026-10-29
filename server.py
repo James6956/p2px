@@ -55,6 +55,10 @@ ADMIN = 1817225234
 WALLET = "0xD606DC557199390D8B0c15937e136ea15D4C5FBb"
 API = f"https://api.telegram.org/bot{TOKEN}"
 MIN_USD = 0.1
+import random, string as _string
+def new_oid():
+    return "".join(random.choices(_string.digits, k=6))
+order_ids = {}  # chat -> order id
 offset = 0
 waiting_amount = set()
 waiting_upi = {}
@@ -140,7 +144,7 @@ def bot_loop():
                         rate = chat_rate.get(chat, 99)
                         active_orders[chat] = (amt, rate)
                         send(chat, f"✅ Phone number saved.\n\nYour ₹{amt * rate:,.0f} will be transferred via CDM shortly.", KB)
-                        send(ADMIN, f"🏦 CDM PAYOUT\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nBank account: {acct}\nPhone: {phone}\nPayout: ₹{amt * rate:,.0f}\n\nDo the CDM deposit, then tap a button to tell them:", [[
+                        send(ADMIN, f"🏦 CDM PAYOUT\n\n🧾 Order ID: {order_ids.get(chat, '?')}\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nBank account: {acct}\nPhone: {phone}\nPayout: ₹{amt * rate:,.0f}\n\nDo the CDM deposit, then tap a button to tell them:", [[
                             {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]])
@@ -190,7 +194,7 @@ def bot_loop():
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]]
                         send(chat, f"✅ UPI ID saved: {upi}\n\nYour ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
-                        send(ADMIN, f"💳 UPI FOR PAYOUT ({'CDM' if rate == 99 else 'USDT'})\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nUPI: <code>{upi}</code>\nPayout: ₹{amt * rate:,.0f}\n\nSend the rupees now, then tap a button to tell them:", akb, pm="HTML")
+                        send(ADMIN, f"💳 UPI FOR PAYOUT ({'CDM' if rate == 99 else 'USDT'})\n\n🧾 Order ID: {order_ids.get(chat, '?')}\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nUPI: <code>{upi}</code>\nPayout: ₹{amt * rate:,.0f}\n\nSend the rupees now, then tap a button to tell them:", akb, pm="HTML")
                     elif chat in waiting_amount:
                         try:
                             amt = float(text.replace("$", "").replace(",", ""))
@@ -208,9 +212,11 @@ def bot_loop():
                         waiting_amount.discard(chat)
                         inr = amt * rate
                         pending_approval[chat] = (amt, rate)
+                        order_ids[chat] = new_oid()
+                        oid = order_ids[chat]
                         mode = "CDM" if rate == 99 else "USDT"
-                        send(chat, f"✅ Got it: ${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\n⏳ Your order is pending approval from the team. You'll get a message here as soon as it's accepted or rejected.", KB)
-                        send(ADMIN, f"🔔 NEW SELL ORDER ({mode}) — APPROVAL NEEDED\n\n{name} (@{username}, id {chat})\nAmount: ${amt:g}\nRate: {rate:g}rs/$\nPayout: ₹{inr:,.0f}\n\nAccept or reject their order:", [[
+                        send(chat, f"✅ Got it: ${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\n🧾 Order ID: {oid}\n\n⏳ Your order is pending approval from the team. You'll get a message here as soon as it's accepted or rejected.", KB)
+                        send(ADMIN, f"🔔 NEW SELL ORDER ({mode}) — APPROVAL NEEDED\n\n🧾 Order ID: {oid}\n\n{name} (@{username}, id {chat})\nAmount: ${amt:g}\nRate: {rate:g}rs/$\nPayout: ₹{inr:,.0f}\n\nAccept or reject their order:", [[
                             {"text": "✅ Accept order", "callback_data": f"apr:{chat}"},
                             {"text": "❌ Reject order", "callback_data": f"rej:{chat}"},
                         ]])
@@ -261,7 +267,7 @@ def bot_loop():
                         active_orders.pop(chat, None)
                         if amt:
                             send(chat, "❌ Order cancelled. No payment was expected. Tap 💵 Sell anytime to start a new one.", KB)
-                            send(ADMIN, f"🚫 {name} (@{username}, id {chat}) CANCELLED their ${amt:g} order.")
+                            send(ADMIN, f"🚫 {name} (@{username}, id {chat}) CANCELLED order {order_ids.get(chat, '?')} (${amt:g}).")
                         else:
                             send(chat, "No active order. Tap 💵 Sell to start one.", KB)
                     elif data.startswith("adm_"):
@@ -279,8 +285,8 @@ def bot_loop():
                                     {"text": "📸 Yes, send proof", "callback_data": "proofyes"},
                                     {"text": "No, thanks", "callback_data": "proofno"},
                                 ]]
-                                send(target, f"🎉 Done! Your ₹{amt * rate:,.0f} has been {how}. Thanks for trading with us!\n\nWant a screenshot proof of the payment?", pkb)
-                                send(ADMIN, f"✅ Marked as paid by {actor_name} (@{actor_un}, id {actor_id}): ₹{amt * rate:,.0f} to user {target}. They've been notified.")
+                                send(target, f"🎉 Done! Order {order_ids.get(target, '')}: ₹{amt * rate:,.0f} has been {how}. Thanks for trading with us!\n\nWant a screenshot proof of the payment?", pkb)
+                                send(ADMIN, f"✅ Marked as paid by {actor_name} (@{actor_un}, id {actor_id}): order {order_ids.get(target, '?')}, ₹{amt * rate:,.0f} to user {target}. They've been notified.")
                             else:
                                 send(ADMIN, "No active order for that user.")
                         else:
@@ -288,7 +294,7 @@ def bot_loop():
                             if entry:
                                 amt, rate = entry
                                 send(target, "❌ Your order was cancelled by the team. If you have questions, message the admin.", KB)
-                                send(ADMIN, f"🚫 Marked cancelled by {actor_name} (@{actor_un}, id {actor_id}): ${amt:g} order from user {target}. They've been notified.")
+                                send(ADMIN, f"🚫 Marked cancelled by {actor_name} (@{actor_un}, id {actor_id}): order {order_ids.get(target, '?')} (${amt:g}) from user {target}. They've been notified.")
                             else:
                                 send(ADMIN, "No active order for that user.")
                     elif data.startswith("apr:") or data.startswith("rej:"):
@@ -307,12 +313,12 @@ def bot_loop():
                                 {"text": "❌ Cancel order", "callback_data": "cancel"},
                             ]]
                             user_pending[target] = amt
-                            send(target, f"🎉 Order ACCEPTED! ${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\nNow send ${amt:g} (USDT/USDC) to this wallet (network: BEP20, ARB, POL or BASE):\n`{WALLET}`", kb2)
-                            send(ADMIN, f"✅ {actor_name} (@{actor_un}, id {actor_id}) accepted ${amt:g} order from user {target}. Wallet sent to them.")
+                            send(target, f"🎉 Order ACCEPTED! 🧾 {order_ids.get(target, '')}\n\n${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\nNow send ${amt:g} (USDT/USDC) to this wallet (network: BEP20, ARB, POL or BASE):\n`{WALLET}`", kb2)
+                            send(ADMIN, f"✅ {actor_name} (@{actor_un}, id {actor_id}) accepted order {order_ids.get(target, '?')} (${amt:g}) from user {target}. Wallet sent to them.")
                         else:
                             amt, rate = entry
                             send(target, "❌ Your order was rejected by the team. If you think this is a mistake, message the admin.", KB)
-                            send(ADMIN, f"🚫 {actor_name} (@{actor_un}, id {actor_id}) rejected ${amt:g} order from user {target}. They've been notified.")
+                            send(ADMIN, f"🚫 {actor_name} (@{actor_un}, id {actor_id}) rejected order {order_ids.get(target, '?')} (${amt:g}) from user {target}. They've been notified.")
                     elif data == "proofyes":
                         send(chat, "👍 Sure! Our team will send your screenshot proof here shortly.", KB)
                         sk = [[
