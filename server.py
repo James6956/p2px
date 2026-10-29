@@ -346,6 +346,7 @@ def bot_loop():
                                 amt = pa[0]
                                 send(ADMIN, f"ℹ️ User {chat} cancelled their ${amt:g} order while awaiting approval.")
                         active_orders.pop(chat, None)
+                        watch_payments.pop(chat, None)
                         if amt:
                             send(chat, "❌ Order cancelled. No payment was expected. Tap 💵 Sell anytime to start a new one.", KB)
                             send(ADMIN, f"🚫 {name} (@{username}, id {chat}) CANCELLED order {order_ids.get(chat, '?')} (${amt:g}).")
@@ -358,6 +359,7 @@ def bot_loop():
                         target = int(data.split(":")[1])
                         if data.startswith("adm_done:"):
                             entry = active_orders.pop(target, None)
+                            watch_payments.pop(target, None)
                             if entry:
                                 amt, rate = entry
                                 how = "transferred to your account via CDM" if rate == 99 else ("sent to your UPI QR" if pay_method.get(target) == "qr" else "sent to your UPI ID")
@@ -372,6 +374,7 @@ def bot_loop():
                                 send(ADMIN, "No active order for that user.")
                         else:
                             entry = active_orders.pop(target, None)
+                            watch_payments.pop(target, None)
                             if entry:
                                 amt, rate = entry
                                 send(target, "❌ Your order was cancelled by the team. If you have questions, message the admin.", KB)
@@ -389,6 +392,7 @@ def bot_loop():
                         elif data.startswith("apr:"):
                             amt, rate = entry
                             inr = amt * rate
+                            watch_payments[target] = {"amt": amt, "started": int(time.time()), "notified": False}
                             kb2 = [[
                                 {"text": "✅ Confirm payment", "callback_data": "confirm"},
                                 {"text": "❌ Cancel order", "callback_data": "cancel"},
