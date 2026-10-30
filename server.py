@@ -77,40 +77,6 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, f'<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url={link}"><title>Opening payment app…</title></head><body style="font-family:sans-serif;text-align:center;padding-top:40vh"><p>Opening your payment app…</p><p><a href="{link}">Tap here if it does not open</a></p></body></html>')
             else:
                 self._send(400, "missing upi")
-        elif self.path == "/api/qr":
-            try:
-                o = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
-                oid = str(o.get("id", ""))
-                import base64 as _b64
-                data = _b64.b64decode(o.get("img", ""))
-                if len(data) > 6_000_000:
-                    raise ValueError("too big")
-                order = web_orders.get(oid)
-                if not order:
-                    raise ValueError("no order")
-                upi_uri = decode_upi_bytes(data)
-                if not upi_uri:
-                    self._send(200, json.dumps({"ok": False, "err": "Could not read that QR. Make sure the whole QR is in the photo, or type your UPI ID instead."}))
-                    return
-                from urllib.parse import urlparse as _up, parse_qs as _pq, quote as _q
-                qp = _pq(_up(upi_uri).query)
-                pay_upi = qp.get("pa", [""])[0]
-                order["upi"] = pay_upi
-                if order["status"] == "awaiting_qr":
-                    order["status"] = "awaiting"
-                _web_save()
-                inr = order["inr"]
-                tkb = [[
-                    {"text": f"📲 Pay ₹{inr:,} (opens payment app)", "url": f"https://p2px.onrender.com/pay?u={_q(pay_upi)}&a={_q(str(inr))}"},
-                ], [
-                    {"text": "✅ USDT received", "callback_data": f"webr:{oid}"},
-                    {"text": "🚫 Cancel", "callback_data": f"webc:{oid}"},
-                ]]
-                call("sendMessage", chat_id=ADMIN, text=(f"🌐 WEBSITE ORDER #{oid} — QR received\nUPI: <code>{pay_upi}</code>\nPayout: ₹{inr:,}\n\nTap the pay button to open your payment app with the amount filled."), reply_markup={"inline_keyboard": tkb}, parse_mode="HTML")
-                self._send(200, json.dumps({"ok": True}))
-            except Exception as e:
-                print("qr upload err:", e, flush=True)
-                self._send(200, json.dumps({"ok": False, "err": "Upload failed, try again"}))
         elif self.path.startswith("/api/status"):
             from urllib.parse import urlparse, parse_qs
             q = parse_qs(urlparse(self.path).query)
@@ -153,6 +119,43 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:
                 print("order err:", e, flush=True)
                 self._send(400, json.dumps({"ok": False}))
+        elif self.path == "/api/qr":
+            try:
+                o = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                oid = str(o.get("id", ""))
+                import base64 as _b64
+                data = _b64.b64decode(o.get("img", ""))
+                if len(data) > 6_000_000:
+                    raise ValueError("too big")
+                order = web_orders.get(oid)
+                if not order:
+                    raise ValueError("no order")
+                upi_uri = decode_upi_bytes(data)
+                if not upi_uri:
+                    self._send(200, json.dumps({"ok": False, "err": "Could not read that QR. Make sure the whole QR is in the photo, or type your UPI ID instead."}))
+                    return
+                from urllib.parse import urlparse as _up, parse_qs as _pq, quote as _q
+                qp = _pq(_up(upi_uri).query)
+                pay_upi = qp.get("pa", [""])[0]
+                order["upi"] = pay_upi
+                if order["status"] == "awaiting_qr":
+                    order["status"] = "awaiting"
+                _web_save()
+                inr = order["inr"]
+                tkb = [[
+                    {"text": f"📲 Pay ₹{inr:,} (opens payment app)", "url": f"https://p2px.onrender.com/pay?u={_q(pay_upi)}&a={_q(str(inr))}"},
+                ], [
+                    {"text": "✅ USDT received", "callback_data": f"webr:{oid}"},
+                    {"text": "🚫 Cancel", "callback_data": f"webc:{oid}"},
+                ]]
+                try:
+                    call("sendMessage", chat_id=ADMIN, text=(f"🌐 WEBSITE ORDER #{oid} — QR received\nUPI: <code>{pay_upi}</code>\nPayout: ₹{inr:,}\n\nTap the pay button to open your payment app with the amount filled."), reply_markup={"inline_keyboard": tkb}, parse_mode="HTML")
+                except Exception as e:
+                    print("qr admin notify failed:", e, flush=True)
+                self._send(200, json.dumps({"ok": True}))
+            except Exception as e:
+                print("qr upload err:", e, flush=True)
+                self._send(200, json.dumps({"ok": False, "err": "Upload failed, try again"}))
         else:
             self._send(404, "not found")
 
