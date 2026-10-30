@@ -298,6 +298,7 @@ def bot_loop():
                         amt = waiting_upi.get(chat)
                         rate = chat_rate.get(chat, 100)
                         file_id = msg["photo"][-1]["file_id"]
+                        send(chat, "⏳ One sec, checking your QR…")
                         upi_uri = decode_upi_qr(file_id)
                         pay_note = "Scan the QR to pay, then tap a button to tell them:"
                         akb = [[
