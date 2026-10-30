@@ -140,6 +140,9 @@ class H(BaseHTTPRequestHandler):
                              "ref": (d.get("ref") or "")[:20], "status": "awaiting", "ts": int(time.time())}
                     web_orders[oid] = order
                     _web_save()
+                if not order:
+                    self._send(200, json.dumps({"ok": False, "err": "Order expired after a server restart. Please start the order again."}))
+                    return
                 upi_uri = decode_upi_bytes(data)
                 if not upi_uri:
                     self._send(200, json.dumps({"ok": False, "err": "Could not read that QR. Make sure the whole QR is in the photo, or type your UPI ID instead."}))
