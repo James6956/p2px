@@ -140,6 +140,8 @@ class H(BaseHTTPRequestHandler):
                     order = {"amt": amt, "inr": inr, "mode": mode, "upi": None,
                              "acct": d.get("account"), "phone": d.get("phone"),
                              "ref": (d.get("ref") or "")[:20], "status": "awaiting", "ts": int(time.time())}
+                    if not oid:
+                        oid = new_oid()
                     web_orders[oid] = order
                     _web_save()
                 if not order:
@@ -167,7 +169,7 @@ class H(BaseHTTPRequestHandler):
                     call("sendMessage", chat_id=ADMIN, text=(f"🌐 WEBSITE ORDER #{oid} — QR received\nUPI: <code>{pay_upi}</code>\nPayout: ₹{inr:,}\n\nTap the pay button to open your payment app with the amount filled."), reply_markup={"inline_keyboard": tkb}, parse_mode="HTML")
                 except Exception as e:
                     print("qr admin notify failed:", e, flush=True)
-                self._send(200, json.dumps({"ok": True}))
+                self._send(200, json.dumps({"ok": True, "id": oid}))
             except Exception as e:
                 print("qr upload err:", e, flush=True)
                 self._send(200, json.dumps({"ok": False, "err": "Upload failed, try again"}))
