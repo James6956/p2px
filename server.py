@@ -10,27 +10,36 @@ def upi_pay_link(upi, inr):
     from urllib.parse import quote
     return f"upi://pay?pa={quote(upi)}&am={inr}&cu=INR"
 
-def decode_upi_qr(file_id):
+def _ensure_zxing():
+    try:
+        import zxingcpp
+    except ImportError:
+        import subprocess
+        subprocess.run(["pip", "install", "--quiet", "zxing-cpp", "Pillow"], check=False)
+        import zxingcpp
+    return zxingcpp
+
+def decode_upi_bytes(data):
     try:
         import io
-        try:
-            import zxingcpp
-        except ImportError:
-            import subprocess
-            subprocess.run(["pip", "install", "--quiet", "zxing-cpp", "Pillow"], check=False)
-            import zxingcpp
+        zx = _ensure_zxing()
         from PIL import Image
-        gp = call("getFile", file_id=file_id)
-        data = urllib.request.urlopen(f"https://api.telegram.org/file/bot{TOKEN}/{gp['result']['file_path']}", timeout=30).read()
         img = Image.open(io.BytesIO(data))
-        results = zxingcpp.read_barcodes(img)
-        for r in results:
-            t = r.text
-            if t.startswith("upi://"):
-                return t
+        for r in zx.read_barcodes(img):
+            if r.text.startswith("upi://"):
+                return r.text
         return None
     except Exception as e:
         print("qr decode failed:", e, flush=True)
+        return None
+
+def decode_upi_qr(file_id):
+    try:
+        gp = call("getFile", file_id=file_id)
+        data = urllib.request.urlopen(f"https://api.telegram.org/file/bot{TOKEN}/{gp['result']['file_path']}", timeout=30).read()
+        return decode_upi_bytes(data)
+    except Exception as e:
+        print("qr fetch failed:", e, flush=True)
         return None
 
 def notify(text):
@@ -68,6 +77,40 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, f'<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url={link}"><title>Opening payment app…</title></head><body style="font-family:sans-serif;text-align:center;padding-top:40vh"><p>Opening your payment app…</p><p><a href="{link}">Tap here if it does not open</a></p></body></html>')
             else:
                 self._send(400, "missing upi")
+        elif self.path == "/api/qr":
+            try:
+                o = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                oid = str(o.get("id", ""))
+                import base64 as _b64
+                data = _b64.b64decode(o.get("img", ""))
+                if len(data) > 6_000_000:
+                    raise ValueError("too big")
+                order = web_orders.get(oid)
+                if not order:
+                    raise ValueError("no order")
+                upi_uri = decode_upi_bytes(data)
+                if not upi_uri:
+                    self._send(200, json.dumps({"ok": False, "err": "Could not read that QR. Make sure the whole QR is in the photo, or type your UPI ID instead."}))
+                    return
+                from urllib.parse import urlparse as _up, parse_qs as _pq, quote as _q
+                qp = _pq(_up(upi_uri).query)
+                pay_upi = qp.get("pa", [""])[0]
+                order["upi"] = pay_upi
+                if order["status"] == "awaiting_qr":
+                    order["status"] = "awaiting"
+                _web_save()
+                inr = order["inr"]
+                tkb = [[
+                    {"text": f"📲 Pay ₹{inr:,} (opens payment app)", "url": f"https://p2px.onrender.com/pay?u={_q(pay_upi)}&a={_q(str(inr))}"},
+                ], [
+                    {"text": "✅ USDT received", "callback_data": f"webr:{oid}"},
+                    {"text": "🚫 Cancel", "callback_data": f"webc:{oid}"},
+                ]]
+                call("sendMessage", chat_id=ADMIN, text=(f"🌐 WEBSITE ORDER #{oid} — QR received\nUPI: <code>{pay_upi}</code>\nPayout: ₹{inr:,}\n\nTap the pay button to open your payment app with the amount filled."), reply_markup={"inline_keyboard": tkb}, parse_mode="HTML")
+                self._send(200, json.dumps({"ok": True}))
+            except Exception as e:
+                print("qr upload err:", e, flush=True)
+                self._send(200, json.dumps({"ok": False, "err": "Upload failed, try again"}))
         elif self.path.startswith("/api/status"):
             from urllib.parse import urlparse, parse_qs
             q = parse_qs(urlparse(self.path).query)
@@ -90,12 +133,14 @@ class H(BaseHTTPRequestHandler):
                     raise ValueError("bad order")
                 inr = int(round(amt * SITE_RATE[mode]))
                 oid = new_oid()
+                qr_mode = bool(o.get("qr"))
                 web_orders[oid] = {"amt": amt, "inr": inr, "mode": mode, "upi": o.get("upi"),
                                    "acct": o.get("account"), "phone": o.get("phone"),
-                                   "ref": (o.get("ref") or "")[:20], "status": "awaiting", "ts": int(time.time())}
+                                   "ref": (o.get("ref") or "")[:20],
+                                   "status": "awaiting_qr" if qr_mode else "awaiting", "ts": int(time.time())}
                 _web_save()
                 tag = "UPI" if mode == "upi" else "CDM"
-                detail = f"UPI: {o.get('upi')}" if mode == "upi" else f"Account: {o.get('account')}\nPhone: {o.get('phone')}"
+                detail = (f"QR photo coming next..." if qr_mode else f"UPI: {o.get('upi')}") if mode == "upi" else f"Account: {o.get('account')}\nPhone: {o.get('phone')}"
                 wkb = [[
                     {"text": "✅ USDT received", "callback_data": f"webr:{oid}"},
                     {"text": "🚫 Cancel", "callback_data": f"webc:{oid}"},
