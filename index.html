@@ -196,6 +196,9 @@ const STATUS = {
 };
 let flow = null, amt = 0, myOrder = null, pollTimer = null, qrMode = false, lastPayload = null;
 
+// wake the server as soon as the page opens so later steps are instant
+fetch('/api/ping').catch(() => {});
+
 function openFlow(f) {
   flow = f;
   amt = 0;
@@ -227,19 +230,26 @@ function checkAmount() {
 }
 function confirmPay() { qrMode = false; show('s3'); }
 function chooseQr() { qrMode = true; show('s3q'); }
+function setBusy(btn, busy, label) {
+  if (busy) { btn.dataset.old = btn.textContent; btn.textContent = label; btn.disabled = true; btn.style.opacity = .6; }
+  else { btn.textContent = btn.dataset.old || btn.textContent; btn.disabled = false; btn.style.opacity = 1; }
+}
 function uploadQr() {
   const e = document.getElementById('errQ');
   e.style.display = 'none';
+  const btn = event.target;
   const f = document.getElementById('qrFile').files[0];
   if (!f) { e.textContent = "Choose a QR photo first"; e.style.display = 'block'; return; }
   if (f.size > 4_500_000) { e.textContent = "Photo too big, take a normal screenshot of the QR"; e.style.display = 'block'; return; }
   const reader = new FileReader();
+  setBusy(event.target, true, "⏳ Uploading, one sec…");
   reader.onload = () => {
     fetch('/api/qr', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ id: myOrder, img: reader.result.split(',')[1], order: lastPayload }) })
       .then(r => r.json()).then(res => {
         if (res.ok) { show('s4'); startPoll(); }
         else { e.textContent = res.err || "Could not read the QR, try again or type your UPI ID"; e.style.display = 'block'; }
-      }).catch(() => { e.textContent = "Network error, try again"; e.style.display = 'block'; });
+        setBusy(btn, false);
+      }).catch(() => { e.textContent = "Network error, try again"; e.style.display = 'block'; setBusy(btn, false); });
   };
   reader.readAsDataURL(f);
 }
