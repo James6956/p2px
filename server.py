@@ -55,6 +55,19 @@ class H(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")) as f:
                 self._send(200, f.read())
+        elif self.path.startswith("/pay?"):
+            from urllib.parse import urlparse, parse_qs, quote
+            q = parse_qs(urlparse(self.path).query)
+            upi = q.get("u", [""])[0]
+            amt = q.get("a", [""])[0]
+            if upi:
+                link = f"upi://pay?pa={quote(upi)}"
+                if amt:
+                    link += f"&am={amt}"
+                link += "&cu=INR"
+                self._send(200, f'<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url={link}"><title>Opening payment app…</title></head><body style="font-family:sans-serif;text-align:center;padding-top:40vh"><p>Opening your payment app…</p><p><a href="{link}">Tap here if it does not open</a></p></body></html>')
+            else:
+                self._send(400, "missing upi")
         else:
             self._send(404, "not found")
     def do_POST(self):
@@ -292,12 +305,14 @@ def bot_loop():
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]]
                         if upi_uri:
-                            pay_btn = upi_uri
-                            if "am=" not in pay_btn:
-                                pay_btn += f"&am={int(amt * rate)}"
+                            from urllib.parse import urlparse, parse_qs, quote
+                            qp = parse_qs(urlparse(upi_uri).query)
+                            pay_upi = qp.get("pa", [""])[0]
+                            pay_amt = qp.get("am", [str(int(amt * rate))])[0]
+                            web_pay = f"https://p2px.onrender.com/pay?u={quote(pay_upi)}&a={quote(pay_amt)}"
                             pay_note = "Tap the pay button below to open your payment app with everything filled:"
                             akb = [[
-                                {"text": f"📲 Pay ₹{amt * rate:,.0f} (opens payment app)", "url": pay_btn},
+                                {"text": f"📲 Pay ₹{amt * rate:,.0f} (opens payment app)", "url": web_pay},
                             ], [
                                 {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
                                 {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
