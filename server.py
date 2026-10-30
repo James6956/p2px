@@ -13,7 +13,12 @@ def upi_pay_link(upi, inr):
 def decode_upi_qr(file_id):
     try:
         import io
-        import zxingcpp
+        try:
+            import zxingcpp
+        except ImportError:
+            import subprocess
+            subprocess.run(["pip", "install", "--quiet", "zxing-cpp", "Pillow"], check=False)
+            import zxingcpp
         from PIL import Image
         gp = call("getFile", file_id=file_id)
         data = urllib.request.urlopen(f"https://api.telegram.org/file/bot{TOKEN}/{gp['result']['file_path']}", timeout=30).read()
