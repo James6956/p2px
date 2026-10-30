@@ -65,7 +65,7 @@ class H(BaseHTTPRequestHandler):
                 if amt:
                     link += f"&am={amt}"
                 link += "&cu=INR"
-                self._send(200, f'<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url={link}"><title>Opening payment app…</title></head><body style="font-family:sans-serif;text-align:center;padding-top:40vh"><p>Opening your payment app…</p><p><a href="{link}">Tap here if it does not open</a></p></body></html>')
+                self._send(200, f'<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="3600;url={link}"><title>Opening payment app…</title></head><body style="font-family:sans-serif;text-align:center;padding-top:40vh"><p>Opening your payment app…</p><p><a href="{link}">Tap here if it does not open</a></p></body></html>')
             else:
                 self._send(400, "missing upi")
         else:
