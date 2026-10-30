@@ -101,7 +101,7 @@ class H(BaseHTTPRequestHandler):
                     {"text": "🚫 Cancel", "callback_data": f"webc:{oid}"},
                 ]]
                 try:
-                    call("sendMessage", chat_id=ADMIN, text=(f"🌐 WEBSITE ORDER #{oid} ({tag})\n\nAmount: ${amt:g}\nPayout: ₹{inr:,}\n{detail}\n\nOn-chain watch is running. Tap ✅ when you see the USDT, then pay the rupees and tap 💸."), reply_markup=wkb)
+                    call("sendMessage", chat_id=ADMIN, text=(f"🌐 WEBSITE ORDER #{oid} ({tag})\n\nAmount: ${amt:g}\nPayout: ₹{inr:,}\n{detail}\n\nOn-chain watch is running. Tap ✅ when you see the USDT, then pay the rupees and tap 💸."), reply_markup={"inline_keyboard": wkb})
                 except Exception as e:
                     print("web admin notify failed:", e, flush=True)
                 self._send(200, json.dumps({"ok": True, "id": oid, "status": "awaiting"}))
@@ -291,10 +291,10 @@ def web_watch():
                         o["status"] = "payout"
                         _web_save()
                         try:
-                            call("sendMessage", chat_id=ADMIN, text=(f"✅ USDT detected on-chain for WEBSITE order #{oid} (${o['amt']:g}). Pay the rupees, then tap ✅ Paid below."), reply_markup=[[
+                            call("sendMessage", chat_id=ADMIN, text=(f"✅ USDT detected on-chain for WEBSITE order #{oid} (${o['amt']:g}). Pay the rupees, then tap ✅ Paid below."), reply_markup={"inline_keyboard": [[
                                 {"text": "💸 Paid", "callback_data": f"webd:{oid}"},
                                 {"text": "🚫 Cancel", "callback_data": f"webc:{oid}"},
-                            ]])
+                            ]]})
                         except Exception as e:
                             print("web watch notify failed:", e, flush=True)
         except Exception as e:

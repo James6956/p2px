@@ -21,6 +21,7 @@
   .card p { color:#848e9c; font-size:13px; margin-bottom:16px; }
   button { background:#f0b90b; color:#0b0e11; border:none; border-radius:8px; padding:12px 18px; font-weight:700; font-size:15px; cursor:pointer; width:100%; }
   button:hover { filter:brightness(1.1); }
+  button.ghost { background:#2b3139; color:#eaecef; margin-top:8px; }
   .steps { max-width:720px; padding:24px 16px 60px; }
   .steps h3 { text-align:center; margin-bottom:18px; }
   .steps ol { color:#848e9c; line-height:2; padding-left:20px; font-size:14px; }
@@ -38,6 +39,7 @@
   .hide { display:none !important; }
   .ok { text-align:center; padding:20px 0; }
   .ok h3 { color:#22c55e; margin-bottom:8px; }
+  .statusbar { border-radius:10px; padding:14px; margin:14px 0; font-size:14px; text-align:center; }
 </style>
 </head>
 <body>
@@ -61,6 +63,32 @@
     <p>Minimum $50.50 (₹5,000) · cash deposit to your bank account</p>
     <button onclick="openFlow('cdm')">Sell at 99rs/$ (CDM)</button>
   </div>
+</section>
+
+<section class="rates">
+  <div class="card">
+    <h2>🏪 Become merchant / 💰 Buy USDT</h2>
+    <p>Want to sell rupees and earn, or buy USDT? Our merchants are ready on Telegram.</p>
+    <button onclick="location.href='https://t.me/Official_p2pX'">Open Telegram</button>
+  </div>
+  <div class="card">
+    <h2>🎁 Refer &amp; earn</h2>
+    <p>₹10 bonus + 0.30% of every order from friends you refer, forever. Get your personal link in the bot.</p>
+    <button onclick="location.href='https://t.me/Official_P2pXbot?start=ref'">Get my link</button>
+  </div>
+</section>
+
+<section class="steps" id="help">
+  <h3>❓ Help / FAQ</h3>
+  <ol>
+    <li><b>What's the rate?</b> We buy USD at 100rs per $1 (UPI) or 99rs (CDM).</li>
+    <li><b>What's the minimum?</b> $0.1 via the bot (UPI), $50.50 (₹5,000) for CDM. On this site, $5 minimum.</li>
+    <li><b>How do I sell?</b> Tap a Sell button, send USDT to the wallet shown, confirm, enter your UPI ID or bank details.</li>
+    <li><b>When do I get my rupees?</b> After we confirm your USDT on-chain, usually within minutes. CDM takes 30-60 minutes.</li>
+    <li><b>Is my money safe?</b> Our merchants are third parties and we have no relation with them, so we can't guarantee anything. Please do your own research.</li>
+    <li><b>Account freeze risk?</b> For safety, always use a secondary account when doing P2P with us to protect your main account.</li>
+    <li><b>Stuck payment?</b> If it's been over 30 minutes, message support on Telegram with your transaction hash: @Official_p2pX</li>
+  </ol>
 </section>
 
 <section class="steps">
@@ -90,7 +118,7 @@
       <div class="wallet" id="wallet"></div>
       <label style="margin-top:14px"></label>
       <button onclick="confirmPay()">✅ I've sent the payment</button>
-      <button style="background:#2b3139;color:#eaecef;margin-top:8px" onclick="closeModal()">Cancel</button>
+      <button class="ghost" onclick="closeModal()">Cancel</button>
     </div>
     <div id="s3" class="hide">
       <h3 id="payTitle">Get paid</h3>
@@ -110,13 +138,24 @@
     </div>
     <div id="s4" class="hide">
       <div class="ok">
-        <h3>🎉 Order received!</h3>
-        <p style="color:#848e9c;font-size:14px" id="doneTxt"></p>
+        <h3>🧾 Order <span id="oid"></span></h3>
+        <div class="statusbar" id="statusbar">⏳ Waiting for your USDT payment on-chain…</div>
+        <p style="color:#848e9c;font-size:13px">Keep this page open — it updates automatically. You can also check later by entering order id at the bottom of the site.</p>
       </div>
       <button onclick="closeModal()">Done</button>
     </div>
   </div>
 </div>
+
+<section class="steps" id="trackSec">
+  <h3>Track an order</h3>
+  <p style="color:#848e9c;font-size:13px;text-align:center">Enter your order id:</p>
+  <div style="display:flex;gap:8px;max-width:300px;margin:10px auto 0">
+    <input type="text" id="trackId" placeholder="e.g. 123456" style="flex:1;background:#0b0e11;border:1px solid #2b3139;border-radius:8px;color:#eaecef;padding:11px 12px;font-size:15px">
+    <button style="width:auto" onclick="track()">Check</button>
+  </div>
+  <div class="statusbar" id="trackBar" style="display:none;max-width:420px;margin:14px auto 0"></div>
+</section>
 
 <footer>P2P.X · rates subject to change · trade safely, use a secondary account</footer>
 
@@ -124,7 +163,14 @@
 const RATE = { upi: 100, cdm: 99 };
 const MIN = { upi: 5, cdm: 50.50 };
 const WALLET = "0xD606DC557199390D8B0c15937e136ea15D4C5FBb";
-let flow = null, amt = 0;
+const STATUS = {
+  awaiting: "⏳ Waiting for your USDT payment on-chain…",
+  verifying: "🔎 Payment seen, verifying…",
+  payout: "💸 USDT confirmed! Team is sending your rupees…",
+  done: "🎉 Done! Your rupees have been sent. Thanks for trading with P2P.X!",
+  cancelled: "❌ This order was cancelled. Contact support if this is a mistake."
+};
+let flow = null, amt = 0, myOrder = null, pollTimer = null;
 
 function openFlow(f) {
   flow = f;
@@ -137,6 +183,7 @@ function openFlow(f) {
 }
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
 function show(id) { ['s1','s2','s3','s4'].forEach(s => document.getElementById(s).classList.toggle('hide', s !== id)); }
+function barText(st) { return STATUS[st] || st; }
 
 function checkAmount() {
   const e = document.getElementById('err1');
@@ -170,17 +217,37 @@ function submitOrder() {
     if (!/^\d{10}$/.test(phone)) { e.textContent = "Enter a valid 10-digit phone number"; e.style.display = 'block'; return; }
     payload = { mode: 'cdm', amount: amt, account: acct, phone: phone };
   }
+  payload.ref = new URLSearchParams(location.search).get('ref') || '';
   fetch('/api/order', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) })
     .then(r => r.json()).then(res => {
-      if (res.ok) {
-        const inr = "₹" + Math.round(amt * RATE[flow]).toLocaleString('en-IN');
-        document.getElementById('doneTxt').textContent = flow === 'upi'
-          ? "Your " + inr + " will be sent to your UPI shortly. Our team will message you on Telegram to complete the trade."
-          : "Your " + inr + " will be deposited to your bank account via CDM within 30-60 minutes. Our team will message you on Telegram.";
+      if (res.ok && res.id) {
+        myOrder = res.id;
+        document.getElementById('oid').textContent = "#" + res.id;
+        document.getElementById('statusbar').textContent = barText(res.status || 'awaiting');
         show('s4');
+        startPoll();
       } else { e.textContent = "Something went wrong, please try again"; e.style.display = 'block'; }
     })
     .catch(() => { e.textContent = "Network error, please try again"; e.style.display = 'block'; });
+}
+function startPoll() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(poll, 15000);
+}
+function poll() {
+  if (!myOrder) return;
+  fetch('/api/status?id=' + myOrder).then(r => r.json()).then(res => {
+    if (res.ok) document.getElementById('statusbar').textContent = barText(res.status);
+  }).catch(() => {});
+}
+function track() {
+  const id = document.getElementById('trackId').value.trim();
+  const bar = document.getElementById('trackBar');
+  if (!id) return;
+  fetch('/api/status?id=' + encodeURIComponent(id)).then(r => r.json()).then(res => {
+    bar.style.display = 'block';
+    bar.textContent = res.ok ? ("Order #" + id + ": " + barText(res.status)) : "Order not found. Check the id.";
+  }).catch(() => { bar.style.display = 'block'; bar.textContent = "Network error, try again"; });
 }
 </script>
 </body>
