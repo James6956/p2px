@@ -68,6 +68,15 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, f'<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url={link}"><title>Opening payment app…</title></head><body style="font-family:sans-serif;text-align:center;padding-top:40vh"><p>Opening your payment app…</p><p><a href="{link}">Tap here if it does not open</a></p></body></html>')
             else:
                 self._send(400, "missing upi")
+        elif self.path.startswith("/api/status"):
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            oid = (q.get("id") or [""])[0]
+            o = web_orders.get(oid)
+            if o:
+                self._send(200, json.dumps({"ok": True, "status": o["status"]}))
+            else:
+                self._send(404, json.dumps({"ok": False}))
         else:
             self._send(404, "not found")
     def do_POST(self):
@@ -76,11 +85,26 @@ class H(BaseHTTPRequestHandler):
                 o = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 mode = o.get("mode")
                 amt = float(o.get("amount", 0))
-                inr = int(round(amt * SITE_RATE.get(mode, 100)))
+                min_usd = 50.50 if mode == "cdm" else 0.1
+                if mode not in SITE_RATE or amt < min_usd:
+                    raise ValueError("bad order")
+                inr = int(round(amt * SITE_RATE[mode]))
+                oid = new_oid()
+                web_orders[oid] = {"amt": amt, "inr": inr, "mode": mode, "upi": o.get("upi"),
+                                   "acct": o.get("account"), "phone": o.get("phone"),
+                                   "ref": (o.get("ref") or "")[:20], "status": "awaiting", "ts": int(time.time())}
+                _web_save()
                 tag = "UPI" if mode == "upi" else "CDM"
                 detail = f"UPI: {o.get('upi')}" if mode == "upi" else f"Account: {o.get('account')}\nPhone: {o.get('phone')}"
-                ok = notify(f"🌐 WEBSITE ORDER ({tag})\n\nAmount: ${amt:g}\nPayout: ₹{inr:,}\n{detail}\n\nCollect the USDT, then message the customer on Telegram to complete.")
-                self._send(200, json.dumps({"ok": ok}))
+                wkb = [[
+                    {"text": "✅ USDT received", "callback_data": f"webr:{oid}"},
+                    {"text": "🚫 Cancel", "callback_data": f"webc:{oid}"},
+                ]]
+                try:
+                    call("sendMessage", chat_id=ADMIN, text=(f"🌐 WEBSITE ORDER #{oid} ({tag})\n\nAmount: ${amt:g}\nPayout: ₹{inr:,}\n{detail}\n\nOn-chain watch is running. Tap ✅ when you see the USDT, then pay the rupees and tap 💸."), reply_markup=wkb)
+                except Exception as e:
+                    print("web admin notify failed:", e, flush=True)
+                self._send(200, json.dumps({"ok": True, "id": oid, "status": "awaiting"}))
             except Exception as e:
                 print("order err:", e, flush=True)
                 self._send(400, json.dumps({"ok": False}))
@@ -232,6 +256,53 @@ def payment_watcher():
         except Exception as e:
             print("watch err:", e, flush=True)
         time.sleep(5)
+
+# ---- website orders (bot-like flow on p2px.onrender.com) ----
+WEB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_orders.json")
+web_orders = {}
+
+def _web_save():
+    try:
+        with open(WEB_FILE, "w") as f:
+            json.dump(web_orders, f)
+    except Exception as e:
+        print("web save failed:", e, flush=True)
+
+def _web_load():
+    global web_orders
+    try:
+        with open(WEB_FILE) as f:
+            web_orders = json.load(f)
+    except Exception:
+        pass
+
+_web_load()
+
+def web_watch():
+    while True:
+        try:
+            changed = False
+            for oid, o in list(web_orders.items()):
+                if o.get("status") == "awaiting" and not o.get("alerted"):
+                    hit = check_incoming(o["amt"], o["ts"])
+                    if hit:
+                        o["alerted"] = True
+                        changed = True
+                        o["status"] = "payout"
+                        _web_save()
+                        try:
+                            call("sendMessage", chat_id=ADMIN, text=(f"✅ USDT detected on-chain for WEBSITE order #{oid} (${o['amt']:g}). Pay the rupees, then tap ✅ Paid below."), reply_markup=[[
+                                {"text": "💸 Paid", "callback_data": f"webd:{oid}"},
+                                {"text": "🚫 Cancel", "callback_data": f"webc:{oid}"},
+                            ]])
+                        except Exception as e:
+                            print("web watch notify failed:", e, flush=True)
+        except Exception as e:
+            print("web watch err:", e, flush=True)
+        time.sleep(60)
+
+_th.Thread(target=web_watch, daemon=True).start()
+
 
 def _boot_check():
     if not ES_KEY:
@@ -569,6 +640,26 @@ def bot_loop():
                                 send(ADMIN, f"🚫 Marked cancelled by {actor_name} (@{actor_un}, id {actor_id}): order {order_ids.get(target, '?')} (${amt:g}) from user {target}. They've been notified.")
                             else:
                                 send(ADMIN, "No active order for that user.")
+                    elif data.startswith("webr:") or data.startswith("webd:") or data.startswith("webc:"):
+                        if chat not in ADMINS:
+                            call("answerCallbackQuery", callback_query_id=cb["id"])
+                            continue
+                        oid = data.split(":")[1]
+                        o = web_orders.get(oid)
+                        if not o:
+                            send(ADMIN, "No such web order.")
+                        elif data.startswith("webr:"):
+                            o["status"] = "payout"
+                            _web_save()
+                            send(ADMIN, f"✅ Web order #{oid} marked USDT received. Pay ₹{o['inr']:,} to the customer, then tap 💸 Paid.")
+                        elif data.startswith("webd:"):
+                            o["status"] = "done"
+                            _web_save()
+                            send(ADMIN, f"💸 Web order #{oid} marked PAID (₹{o['inr']:,}). Customer's page now shows done.")
+                        else:
+                            o["status"] = "cancelled"
+                            _web_save()
+                            send(ADMIN, f"🚫 Web order #{oid} cancelled.")
                     elif data.startswith("apr:") or data.startswith("rej:"):
                         if chat not in ADMINS:
                             call("answerCallbackQuery", callback_query_id=cb["id"])
