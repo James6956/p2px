@@ -285,7 +285,7 @@ KB = [[
 ],[
     {"text": "🏪 Become merchant / 💰 Buy USDT", "callback_data": "merchant"},
 ],[
-    {"text": "🎁 Refer " + AMP + " earn ₹10 + 0.30%", "callback_data": "ref"},
+    {"text": "🎁 Refer and earn ₹10 + 0.30%", "callback_data": "ref"},
     {"text": "❓ Help", "callback_data": "help"},
 ]]
 
@@ -631,7 +631,7 @@ def bot_loop():
                         rkb = [[
                             {"text": f"💸 Withdraw ₹{bal:,.2f}", "callback_data": "refw"},
                         ]] if bal > 0 else []
-                        send(chat, f"🎁 REFER " + AMP + " EARN\n\nShare your link, and when a friend joins and completes their first order you get:\n• ₹10 bonus\n• 0.30% of every order they make, forever\n\n👥 Referrals: {n}\n💰 Balance: ₹{bal:,.2f}\n\nYour link:\n{link}\n\nTap the link, copy and share it.\n\n⚠️ The team can revoke rewards if misuse or self-referrals are found.", rkb)
+                        send(chat, f"🎁 REFER AND EARN\n\nShare your link, and when a friend joins and completes their first order you get:\n• ₹10 bonus\n• 0.30% of every order they make, forever\n\n👥 Referrals: {n}\n💰 Balance: ₹{bal:,.2f}\n\nYour link:\n{link}\n\nTap the link, copy and share it.\n\n⚠️ The team can revoke rewards if misuse or self-referrals are found.", rkb)
                     elif data == "refw":
                         if ref_bal.get(chat, 0.0) <= 0:
                             call("answerCallbackQuery", callback_query_id=cb["id"], text="Nothing to withdraw yet", show_alert=False)
