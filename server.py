@@ -10,6 +10,24 @@ def upi_pay_link(upi, inr):
     from urllib.parse import quote
     return f"upi://pay?pa={quote(upi)}&am={inr}&cu=INR"
 
+def decode_upi_qr(file_id):
+    try:
+        import io
+        import zxingcpp
+        from PIL import Image
+        gp = call("getFile", file_id=file_id)
+        data = urllib.request.urlopen(f"https://api.telegram.org/file/bot{TOKEN}/{gp['result']['file_path']}", timeout=30).read()
+        img = Image.open(io.BytesIO(data))
+        results = zxingcpp.read_barcodes(img)
+        for r in results:
+            t = r.text
+            if t.startswith("upi://"):
+                return t
+        return None
+    except Exception as e:
+        print("qr decode failed:", e, flush=True)
+        return None
+
 def notify(text):
     for cid in ADMINS:
         data = json.dumps({"chat_id": cid, "text": text}).encode()
@@ -164,7 +182,6 @@ offset = 0
 waiting_amount = set()
 waiting_upi = {}
 waiting_upi_choice = {}
-waiting_upi_qr = {}
 active_orders = {}
 user_pending = {}
 chat_rate = {}
@@ -263,13 +280,26 @@ def bot_loop():
                         amt = waiting_upi.get(chat)
                         rate = chat_rate.get(chat, 100)
                         file_id = msg["photo"][-1]["file_id"]
-                        caption = (f"📸 UPI QR FROM USER ({'CDM' if rate == 99 else 'USDT'})\n\n{name} (@{username}, id {chat})\n"
-                                   f"Confirmed ${amt:g} order\nPayout: ₹{amt * rate:,.0f}\n\n"
-                                   f"Scan the QR to pay, then tap a button to tell them:")
+                        upi_uri = decode_upi_qr(file_id)
+                        pay_note = "Scan the QR to pay, then tap a button to tell them:"
                         akb = [[
                             {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]]
+                        if upi_uri:
+                            pay_btn = upi_uri
+                            if "am=" not in pay_btn:
+                                pay_btn += f"&am={int(amt * rate)}"
+                            pay_note = "Tap the pay button below to open your payment app with everything filled:"
+                            akb = [[
+                                {"text": f"📲 Pay ₹{amt * rate:,.0f} (opens payment app)", "url": pay_btn},
+                            ], [
+                                {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
+                                {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
+                            ]]
+                        caption = (f"📸 UPI QR FROM USER ({'CDM' if rate == 99 else 'USDT'})\n\n{name} (@{username}, id {chat})\n"
+                                   f"Confirmed ${amt:g} order\nPayout: ₹{amt * rate:,.0f}\n\n"
+                                   f"{pay_note}")
                         ok = True
                         for cid in ADMINS:
                             try:
@@ -281,9 +311,7 @@ def bot_loop():
                             waiting_upi.pop(chat, None)
                             active_orders[chat] = (amt, rate)
                             pay_method[chat] = "qr"
-                            waiting_upi[chat] = amt
-                            waiting_upi_qr[chat] = True
-                            send(chat, f"✅ QR received! Your ₹{amt * rate:,.0f} is on the way.\n\nOptional: also type your UPI ID (like name@okhdfc) and the merchant can pay you with ONE TAP instead of scanning. Or type skip.", KB)
+                            send(chat, f"✅ QR received! Your ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
                         continue
                     elif chat in waiting_upi:
                         upi = text.strip()
@@ -292,25 +320,13 @@ def bot_loop():
                             continue
                         amt = waiting_upi.pop(chat)
                         rate = chat_rate.get(chat, 100)
-                        if text.strip().lower() == "skip" or waiting_upi_qr.pop(chat, None):
-                            if text.strip().lower() != "skip":
-                                inr = amt * rate
-                                tkb = [[
-                                    {"text": f"📲 Pay ₹{inr:,.0f} (opens payment app)", "url": upi_pay_link(text.strip(), int(inr))},
-                                ]]
-                                send(ADMIN, f"📲 ONE-TAP PAY for QR order {order_ids.get(chat, '?')}\nUPI: <code>{text.strip()}</code>\nPayout: ₹{inr:,.0f}\n\nTap to open your payment app with the amount filled:", tkb, pm="HTML")
-                                send(chat, "✅ UPI ID saved — merchant can now pay you with one tap.")
-                            continue
                         active_orders[chat] = (amt, rate)
-                        inr = amt * rate
                         akb = [[
-                            {"text": f"📲 Pay ₹{inr:,.0f} (opens payment app)", "url": upi_pay_link(upi, int(inr))},
-                        ], [
                             {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]]
-                        send(chat, f"✅ UPI ID saved: {upi}\n\nYour ₹{inr:,.0f} is on the way. Our team will send it shortly.", KB)
-                        send(ADMIN, f"💳 UPI FOR PAYOUT ({'CDM' if rate == 99 else 'USDT'})\n\n🧾 Order ID: {order_ids.get(chat, '?')}\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nUPI: <code>{upi}</code>\nPayout: ₹{inr:,.0f}\n\nTap the pay button to open your payment app with the amount filled, or send manually. Then tap a button to tell them:", akb, pm="HTML")
+                        send(chat, f"✅ UPI ID saved: {upi}\n\nYour ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
+                        send(ADMIN, f"💳 UPI FOR PAYOUT ({'CDM' if rate == 99 else 'USDT'})\n\n🧾 Order ID: {order_ids.get(chat, '?')}\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nUPI: <code>{upi}</code>\nPayout: ₹{amt * rate:,.0f}\n\nSend the rupees now, then tap a button to tell them:", akb, pm="HTML")
                     elif chat in waiting_amount:
                         try:
                             amt = float(text.replace("$", "").replace(",", ""))
