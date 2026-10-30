@@ -194,7 +194,7 @@ const STATUS = {
   cancelled: "❌ This order was cancelled. Contact support if this is a mistake.",
   awaiting_qr: "⏳ Upload your UPI QR photo…"
 };
-let flow = null, amt = 0, myOrder = null, pollTimer = null, qrMode = false;
+let flow = null, amt = 0, myOrder = null, pollTimer = null, qrMode = false, lastPayload = null;
 
 function openFlow(f) {
   flow = f;
@@ -235,7 +235,7 @@ function uploadQr() {
   if (f.size > 4_500_000) { e.textContent = "Photo too big, take a normal screenshot of the QR"; e.style.display = 'block'; return; }
   const reader = new FileReader();
   reader.onload = () => {
-    fetch('/api/qr', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ id: myOrder, img: reader.result.split(',')[1] }) })
+    fetch('/api/qr', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ id: myOrder, img: reader.result.split(',')[1], order: lastPayload }) })
       .then(r => r.json()).then(res => {
         if (res.ok) { show('s4'); startPoll(); }
         else { e.textContent = res.err || "Could not read the QR, try again or type your UPI ID"; e.style.display = 'block'; }
@@ -260,6 +260,7 @@ function submitOrder() {
   }
   payload.ref = new URLSearchParams(location.search).get('ref') || '';
   payload.qr = qrMode;
+  lastPayload = payload;
   fetch('/api/order', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) })
     .then(r => r.json()).then(res => {
       if (res.ok && res.id) {

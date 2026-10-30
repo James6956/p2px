@@ -128,8 +128,18 @@ class H(BaseHTTPRequestHandler):
                 if len(data) > 6_000_000:
                     raise ValueError("too big")
                 order = web_orders.get(oid)
-                if not order:
-                    raise ValueError("no order")
+                if not order and o.get("order"):
+                    d = o["order"]
+                    mode = d.get("mode")
+                    amt = float(d.get("amount", 0))
+                    if mode not in SITE_RATE or amt < (50.50 if mode == "cdm" else 0.1):
+                        raise ValueError("bad order rebuild")
+                    inr = int(round(amt * SITE_RATE[mode]))
+                    order = {"amt": amt, "inr": inr, "mode": mode, "upi": None,
+                             "acct": d.get("account"), "phone": d.get("phone"),
+                             "ref": (d.get("ref") or "")[:20], "status": "awaiting", "ts": int(time.time())}
+                    web_orders[oid] = order
+                    _web_save()
                 upi_uri = decode_upi_bytes(data)
                 if not upi_uri:
                     self._send(200, json.dumps({"ok": False, "err": "Could not read that QR. Make sure the whole QR is in the photo, or type your UPI ID instead."}))
