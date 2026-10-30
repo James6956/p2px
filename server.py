@@ -100,6 +100,59 @@ def new_oid():
     return "".join(random.choices(_string.digits, k=6))
 order_ids = {}  # chat -> order id
 
+# ---- referral system ----
+REF_FLAT = 10.0        # rs per referred friend first completed order
+REF_PCT = 0.003        # 0.30 pct of every referred order (inr)
+referrals = {}         # user_id -> referrer_id
+seen_users = set()
+ref_paid_first = set()
+ref_bal = {}           # referrer_id -> pending rupees
+ref_withdraw = {}      # referrer_id -> upi id pending request
+waiting_refw = set()
+REF_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "referrals.json")
+
+def _ref_save():
+    try:
+        with open(REF_FILE, "w") as f:
+            json.dump({"referrals": {str(k): v for k, v in referrals.items()}, "seen": list(seen_users), "first": list(ref_paid_first),
+                       "bal": {str(k): v for k, v in ref_bal.items()},
+                       "wd": {str(k): v for k, v in ref_withdraw.items()}}, f)
+    except Exception as e:
+        print("ref save failed:", e, flush=True)
+
+def _ref_load():
+    global referrals, seen_users, ref_paid_first, ref_bal, ref_withdraw
+    try:
+        with open(REF_FILE) as f:
+            d = json.load(f)
+        referrals = {int(k): int(v) for k, v in d.get("referrals", {}).items()}
+        seen_users = set(d.get("seen", []))
+        ref_paid_first = set(d.get("first", []))
+        ref_bal = {int(k): float(v) for k, v in d.get("bal", {}).items()}
+        ref_withdraw = {int(k): v for k, v in d.get("wd", {}).items()}
+    except Exception:
+        pass
+
+_ref_load()
+
+def ref_credit(target, inr):
+    ref = referrals.get(target)
+    if not ref or ref == target:
+        return
+    earn = 0.0
+    if target not in ref_paid_first:
+        ref_paid_first.add(target)
+        earn += REF_FLAT
+    earn += round(inr * REF_PCT, 2)
+    if earn <= 0:
+        return
+    ref_bal[ref] = round(ref_bal.get(ref, 0.0) + earn, 2)
+    _ref_save()
+    try:
+        send(ref, f"Referral reward: Rs {earn:,.2f} added.\n\nBalance: Rs {ref_bal[ref]:,.2f}\n\nWithdraw anytime from the Refer button.")
+    except Exception:
+        pass
+
 # ===== on-chain payment verification (Etherscan V2, one free key covers all chains) =====
 import threading as _th
 WALLET_L = WALLET.lower()
@@ -232,6 +285,7 @@ KB = [[
 ],[
     {"text": "🏪 Become merchant / 💰 Buy USDT", "callback_data": "merchant"},
 ],[
+    {"text": "🎁 Refer " + AMP + " earn ₹10 + 0.30%", "callback_data": "ref"},
     {"text": "❓ Help", "callback_data": "help"},
 ]]
 
@@ -263,6 +317,18 @@ def bot_loop():
                         waiting_upi_choice.pop(chat, None)
                         waiting_acct.pop(chat, None)
                         waiting_phone.pop(chat, None)
+                        parts = text.split()
+                        if len(parts) > 1 and parts[1].upper().startswith("REF") and parts[1][3:].isdigit():
+                            ref = int(parts[1][3:])
+                            if ref != chat and chat not in seen_users:
+                                referrals[chat] = ref
+                                try:
+                                    send(ref, "👥 New referral joined with your link! You get ₹10 + 0.30% after they complete their first order.")
+                                except Exception:
+                                    pass
+                        if chat not in seen_users:
+                            seen_users.add(chat)
+                            _ref_save()
                         send(chat, WELCOME, KB)
                     elif chat in waiting_acct:
                         acct = text.strip().replace(" ", "")
@@ -334,6 +400,37 @@ def bot_loop():
                             pay_method[chat] = "qr"
                             send(chat, f"✅ QR received! Your ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
                         continue
+                    elif chat in ADMINS and text.lower().startswith("revoke "):
+                        try:
+                            target = int(text.split()[1])
+                        except (ValueError, IndexError):
+                            send(ADMIN, "Usage: revoke <user id>")
+                            continue
+                        old_bal = ref_bal.get(target, 0.0)
+                        ref_bal[target] = 0.0
+                        ref_paid_first.add(target)  # blocks future first-order bonus too
+                        referrals.pop(target, None)
+                        _ref_save()
+                        send(ADMIN, f"🚫 Rewards revoked for user {target}: ₹{old_bal:,.2f} cleared, future referral rewards blocked.")
+                        try:
+                            send(target, "⚠️ Your referral rewards were revoked by the team (misuse or self-referrals). Contact the admin if you think this is a mistake.")
+                        except Exception:
+                            pass
+                    elif chat in waiting_refw:
+                        upi = text.strip()
+                        if "@" not in upi or len(upi) < 6 or " " in upi:
+                            send(chat, "That doesn't look like a UPI ID. It's usually name@bank, like rahul@okhdfc. Try again:")
+                            continue
+                        waiting_refw.discard(chat)
+                        ref_withdraw[chat] = upi
+                        _ref_save()
+                        bal = ref_bal.get(chat, 0.0)
+                        wkb = [[
+                            {"text": "✅ Sent", "callback_data": f"refwpay:{chat}"},
+                            {"text": "🚫 Cancel", "callback_data": f"refwcancel:{chat}"},
+                        ]]
+                        send(ADMIN, f"💸 REFERRAL WITHDRAWAL\n\n🧾 User: {name} (@{username}, id {chat})\nUPI: <code>{upi}</code>\nAmount: ₹{bal:,.2f}\n\nSend the rupees, then tap a button:", wkb, pm="HTML")
+                        send(chat, "✅ Withdrawal requested! You'll get the rupees shortly.")
                     elif chat in waiting_upi:
                         upi = text.strip()
                         if "@" not in upi or len(upi) < 6 or " " in upi:
@@ -460,6 +557,7 @@ def bot_loop():
                                 ]]
                                 send(target, f"🎉 Done! Order {order_ids.get(target, '')}: ₹{amt * rate:,.0f} has been {how}. Thanks for trading with us!\n\nWant a screenshot proof of the payment?", pkb)
                                 send(ADMIN, f"✅ Marked as paid by {actor_name} (@{actor_un}, id {actor_id}): order {order_ids.get(target, '?')}, ₹{amt * rate:,.0f} to user {target}. They've been notified.")
+                                ref_credit(target, amt * rate)
                             else:
                                 send(ADMIN, "No active order for that user.")
                         else:
@@ -522,6 +620,52 @@ def bot_loop():
                         send(chat, "🏪 Become a merchant or 💰 buy USDT?\n\nBoth are handled personally by our team. Great rates, steady volume and priority support.\n\nTap below to contact the admin directly.", [[
                             {"text": "👤 Contact admin", "url": "https://t.me/Official_p2pX"},
                         ]])
+                    elif data == "ref":
+                        try:
+                            me = call("getMe")["result"]["username"]
+                        except Exception:
+                            me = "Official_P2pXbot"
+                        link = f"https://t.me/{me}?start=REF{chat}"
+                        bal = ref_bal.get(chat, 0.0)
+                        n = sum(1 for v in referrals.values() if v == chat)
+                        rkb = [[
+                            {"text": f"💸 Withdraw ₹{bal:,.2f}", "callback_data": "refw"},
+                        ]] if bal > 0 else []
+                        send(chat, f"🎁 REFER " + AMP + " EARN\n\nShare your link, and when a friend joins and completes their first order you get:\n• ₹10 bonus\n• 0.30% of every order they make, forever\n\n👥 Referrals: {n}\n💰 Balance: ₹{bal:,.2f}\n\nYour link:\n{link}\n\nTap the link, copy and share it.\n\n⚠️ The team can revoke rewards if misuse or self-referrals are found.", rkb)
+                    elif data == "refw":
+                        if ref_bal.get(chat, 0.0) <= 0:
+                            call("answerCallbackQuery", callback_query_id=cb["id"], text="Nothing to withdraw yet", show_alert=False)
+                            continue
+                        if chat in ref_withdraw:
+                            send(chat, "⏳ You already have a withdrawal request pending. Wait for the team to send it.")
+                            continue
+                        waiting_refw.add(chat)
+                        send(chat, "💸 Type the UPI ID where you want your ₹" + f"{ref_bal.get(chat, 0):,.2f}" + " sent (like name@okhdfc):")
+                    elif data.startswith("refwpay:") or data.startswith("refwcancel:"):
+                        if chat not in ADMINS:
+                            continue
+                        target = int(data.split(":")[1])
+                        upi = ref_withdraw.get(target)
+                        bal = ref_bal.get(target, 0.0)
+                        if data.startswith("refwcancel:"):
+                            ref_withdraw.pop(target, None)
+                            _ref_save()
+                            send(ADMIN, "🚫 Withdrawal request cancelled.")
+                            try:
+                                send(target, "❌ Your withdrawal request was cancelled. Contact the admin if this is a mistake.")
+                            except Exception:
+                                pass
+                        elif upi:
+                            ref_withdraw.pop(target, None)
+                            ref_bal[target] = 0.0
+                            _ref_save()
+                            send(ADMIN, f"✅ Marked withdrawal paid: ₹{bal:,.2f} to UPI {upi} (user {target}). Balance reset to ₹0.")
+                            try:
+                                send(target, f"💸 Your ₹{bal:,.2f} has been sent to {upi}! Keep referring 🎁", KB)
+                            except Exception:
+                                pass
+                        else:
+                            send(ADMIN, "No pending withdrawal for that user.")
                     elif data == "help":
                         hkb = [[
                             {"text": "📖 FAQ", "callback_data": "faq"},
