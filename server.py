@@ -597,15 +597,23 @@ def bot_loop():
                             continue
                         waiting_amount.discard(chat)
                         inr = amt * rate
-                        pending_approval[chat] = (amt, rate)
                         order_ids[chat] = new_oid()
                         oid = order_ids[chat]
                         mode = "CDM" if rate == 99 else "USDT"
-                        send(chat, f"✅ Got it: ${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\n🧾 Order ID: {oid}\n\n⏳ Your order is pending approval from the team. You'll get a message here as soon as it's accepted or rejected.", KB)
-                        send(ADMIN, f"🔔 NEW SELL ORDER ({mode}) — APPROVAL NEEDED\n\n🧾 Order ID: {oid}\n\n{name} (@{username}, id {chat})\nAmount: ${amt:g}\nRate: {rate:g}rs/$\nPayout: ₹{inr:,.0f}\n\nAccept or reject their order:", [[
-                            {"text": "✅ Accept order", "callback_data": f"apr:{chat}"},
-                            {"text": "❌ Reject order", "callback_data": f"rej:{chat}"},
-                        ]])
+                        if rate == 99:
+                            pending_approval[chat] = (amt, rate)
+                            send(chat, f"✅ Got it: ${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\n🧾 Order ID: {oid}\n\n⏳ Your order is pending approval from the team. You'll get a message here as soon as it's accepted or rejected.", KB)
+                            send(ADMIN, f"🔔 NEW SELL ORDER ({mode}) — APPROVAL NEEDED\n\n🧾 Order ID: {oid}\n\n{name} (@{username}, id {chat})\nAmount: ${amt:g}\nRate: {rate:g}rs/$\nPayout: ₹{inr:,.0f}\n\nAccept or reject their order:", [[
+                                {"text": "✅ Accept order", "callback_data": f"apr:{chat}"},
+                                {"text": "❌ Reject order", "callback_data": f"rej:{chat}"},
+                            ]])
+                        else:
+                            user_pending[chat] = amt
+                            kb2 = [[
+                                {"text": "✅ Confirm payment", "callback_data": "confirm"},
+                                {"text": "❌ Cancel order", "callback_data": "cancel"},
+                            ]]
+                            send(chat, f"✅ Got it: ${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\n🧾 Order ID: {oid}\n\nNow send ${amt:g} (USDT/USDC) to this wallet (network: BEP20, ARB, POL or BASE):\n`{WALLET}`", kb2)
                     elif chat in ADMINS and text.startswith("/check"):
                         w = watch_payments.get(chat)
                         if not w:
@@ -653,12 +661,12 @@ def bot_loop():
                                 waiting_acct[chat] = amt
                                 send(chat, "⏳ Merchant is checking your payment. Now enter your bank account number to get paid:")
                             else:
-                                waiting_upi_choice[chat] = amt
-                                ck = [[
-                                    {"text": "🔤 UPI ID", "callback_data": "payupi"},
-                                    {"text": "📷 QR", "callback_data": "payqr"},
-                                ]]
-                                send(chat, "⏳ Merchant is checking your payment. How do you want to receive the rupees?", ck)
+                                pending_approval[chat] = (amt, rate)
+                                send(chat, "⏳ Merchant is checking your payment. You'll get a message here as soon as it's accepted.", KB)
+                                send(ADMIN, f"🔔 SELL ORDER (USDT) — APPROVAL NEEDED\n\n🧾 Order ID: {order_ids.get(chat, '?')}\n\n{name} (@{username}, id {chat}) paid ${amt:g}\nPayout: ₹{amt * rate:,.0f}\n\nAccept or reject their order:", [[
+                                    {"text": "✅ Accept order", "callback_data": f"apr:{chat}"},
+                                    {"text": "❌ Reject order", "callback_data": f"rej:{chat}"},
+                                ]])
                         else:
                             send(chat, "No active order. Tap 💵 Sell to start one.", KB)
                     elif data == "cancel":
@@ -737,13 +745,22 @@ def bot_loop():
                             amt, rate = entry
                             inr = amt * rate
                             watch_payments[target] = {"amt": amt, "started": int(time.time()), "notified": False}
-                            kb2 = [[
-                                {"text": "✅ Confirm payment", "callback_data": "confirm"},
-                                {"text": "❌ Cancel order", "callback_data": "cancel"},
-                            ]]
-                            user_pending[target] = amt
-                            send(target, f"🎉 Order ACCEPTED! 🧾 {order_ids.get(target, '')}\n\n${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\nNow send ${amt:g} (USDT/USDC) to this wallet (network: BEP20, ARB, POL or BASE):\n`{WALLET}`", kb2)
-                            send(ADMIN, f"✅ {actor_name} (@{actor_un}, id {actor_id}) accepted order {order_ids.get(target, '?')} (${amt:g}) from user {target}. Wallet sent to them.")
+                            if rate == 99:
+                                kb2 = [[
+                                    {"text": "✅ Confirm payment", "callback_data": "confirm"},
+                                    {"text": "❌ Cancel order", "callback_data": "cancel"},
+                                ]]
+                                user_pending[target] = amt
+                                send(target, f"🎉 Order ACCEPTED! 🧾 {order_ids.get(target, '')}\n\n${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\nNow send ${amt:g} (USDT/USDC) to this wallet (network: BEP20, ARB, POL or BASE):\n`{WALLET}`", kb2)
+                                send(ADMIN, f"✅ {actor_name} (@{actor_un}, id {actor_id}) accepted order {order_ids.get(target, '?')} (${amt:g}) from user {target}. Wallet sent to them.")
+                            else:
+                                waiting_upi_choice[target] = amt
+                                ck = [[
+                                    {"text": "🔤 UPI ID", "callback_data": "payupi"},
+                                    {"text": "📷 QR", "callback_data": "payqr"},
+                                ]]
+                                send(target, f"🎉 Order ACCEPTED! 🧾 {order_ids.get(target, '')}\n\n⏳ Merchant is sending your ₹{inr:,.0f}. How do you want to receive the rupees?", ck)
+                                send(ADMIN, f"✅ {actor_name} (@{actor_un}, id {actor_id}) accepted order {order_ids.get(target, '?')} (${amt:g}) from user {target}. Payout method being collected.")
                         else:
                             amt, rate = entry
                             send(target, "❌ Your order was rejected by the team. If you think this is a mistake, message the admin.", KB)
