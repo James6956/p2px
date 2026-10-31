@@ -574,26 +574,13 @@ def bot_loop():
                             continue
                         amt = waiting_upi.pop(chat)
                         rate = chat_rate.get(chat, 100)
+                        active_orders[chat] = (amt, rate)
                         akb = [[
                             {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]]
-                        if pay_method.get(chat) == "upi":
-                            # post-acceptance payout details (old flow keeps working)
-                            active_orders[chat] = (amt, rate)
-                            send(chat, f"✅ UPI ID saved: {upi}\n\nYour ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
-                            send(ADMIN, f"💳 UPI FOR PAYOUT (USDT)\n\n🧾 Order ID: {order_ids.get(chat, '?')}\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nUPI: <code>{upi}</code>\nPayout: ₹{amt * rate:,.0f}\n\nSend the rupees now, then tap a button to tell them:", akb, pm="HTML")
-                        else:
-                            # new UPI flow: UPI id first, THEN approval
-                            pay_method[chat] = "upi"
-                            active_orders[chat] = (amt, rate)
-                            pending_approval[chat] = (amt, rate)
-                            inr = amt * rate
-                            send(chat, f"✅ UPI ID saved: {upi}\n\n⏳ Your order {order_ids.get(chat, '')} is pending approval from the team. You'll get a message here as soon as it's accepted or rejected.", KB)
-                            send(ADMIN, f"🔔 NEW SELL ORDER (USDT) — APPROVAL NEEDED\n\n🧾 Order ID: {order_ids.get(chat, '?')}\n\n{name} (@{username}, id {chat})\nAmount: ${amt:g}\nRate: {rate:g}rs/$\nPayout: ₹{inr:,.0f}\nUPI: <code>{upi}</code>\n\nAccept or reject their order:", [[
-                                {"text": "✅ Accept order", "callback_data": f"apr:{chat}"},
-                                {"text": "❌ Reject order", "callback_data": f"rej:{chat}"},
-                            ]], pm="HTML")
+                        send(chat, f"✅ UPI ID saved: {upi}\n\nYour ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
+                        send(ADMIN, f"💳 UPI FOR PAYOUT ({'CDM' if rate == 99 else 'USDT'})\n\n🧾 Order ID: {order_ids.get(chat, '?')}\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nUPI: <code>{upi}</code>\nPayout: ₹{amt * rate:,.0f}\n\nSend the rupees now, then tap a button to tell them:", akb, pm="HTML")
                     elif chat in waiting_amount:
                         try:
                             amt = float(text.replace("$", "").replace(",", ""))
@@ -610,19 +597,15 @@ def bot_loop():
                             continue
                         waiting_amount.discard(chat)
                         inr = amt * rate
+                        pending_approval[chat] = (amt, rate)
                         order_ids[chat] = new_oid()
                         oid = order_ids[chat]
-                        if rate == 99:
-                            pending_approval[chat] = (amt, rate)
-                            mode = "CDM"
-                            send(chat, f"✅ Got it: ${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\n🧾 Order ID: {oid}\n\n⏳ Your order is pending approval from the team. You'll get a message here as soon as it's accepted or rejected.", KB)
-                            send(ADMIN, f"🔔 NEW SELL ORDER ({mode}) — APPROVAL NEEDED\n\n🧾 Order ID: {oid}\n\n{name} (@{username}, id {chat})\nAmount: ${amt:g}\nRate: {rate:g}rs/$\nPayout: ₹{inr:,.0f}\n\nAccept or reject their order:", [[
-                                {"text": "✅ Accept order", "callback_data": f"apr:{chat}"},
-                                {"text": "❌ Reject order", "callback_data": f"rej:{chat}"},
-                            ]])
-                        else:
-                            send(chat, f"✅ Got it: ${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\n🧾 Order ID: {oid}\n\n⏳ Now type your UPI ID to get paid (like name@okhdfc):", KB)
-                            waiting_upi[chat] = amt
+                        mode = "CDM" if rate == 99 else "USDT"
+                        send(chat, f"✅ Got it: ${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\n🧾 Order ID: {oid}\n\n⏳ Your order is pending approval from the team. You'll get a message here as soon as it's accepted or rejected.", KB)
+                        send(ADMIN, f"🔔 NEW SELL ORDER ({mode}) — APPROVAL NEEDED\n\n🧾 Order ID: {oid}\n\n{name} (@{username}, id {chat})\nAmount: ${amt:g}\nRate: {rate:g}rs/$\nPayout: ₹{inr:,.0f}\n\nAccept or reject their order:", [[
+                            {"text": "✅ Accept order", "callback_data": f"apr:{chat}"},
+                            {"text": "❌ Reject order", "callback_data": f"rej:{chat}"},
+                        ]])
                     elif chat in ADMINS and text.startswith("/check"):
                         w = watch_payments.get(chat)
                         if not w:
@@ -669,8 +652,6 @@ def bot_loop():
                             if rate == 99:
                                 waiting_acct[chat] = amt
                                 send(chat, "⏳ Merchant is checking your payment. Now enter your bank account number to get paid:")
-                            elif pay_method.get(chat) == "upi":
-                                send(chat, "⏳ Merchant is checking your payment. We'll send the rupees to your UPI ID shortly.", KB)
                             else:
                                 waiting_upi_choice[chat] = amt
                                 ck = [[
