@@ -63,7 +63,7 @@
   <div class="card">
     <h2>🏦 CDM deposit</h2>
     <div class="rate">99 ₹/$</div>
-    <p>Minimum $50.50 (₹5,000) · cash deposit to your bank account</p>
+    <p>Minimum $100 · cash deposit to your bank account</p>
     <button onclick="openFlow('cdm')">Sell at 99rs/$ (CDM)</button>
   </div>
 </section>
@@ -85,7 +85,7 @@
   <h3>❓ Help / FAQ</h3>
   <ol>
     <li><b>What's the rate?</b> We buy USD at 100rs per $1 (UPI) or 99rs (CDM).</li>
-    <li><b>What's the minimum?</b> $0.1 via the bot (UPI), $50.50 (₹5,000) for CDM. On this site, $5 minimum.</li>
+    <li><b>What's the minimum?</b> $0.1 via the bot (UPI), $100 for CDM. On this site, $5 minimum.</li>
     <li><b>How do I sell?</b> Tap a Sell button, send USDT to the wallet shown, confirm, enter your UPI ID or bank details.</li>
     <li><b>When do I get my rupees?</b> After we confirm your USDT on-chain, usually within minutes. CDM takes 30-60 minutes.</li>
     <li><b>Is my money safe?</b> Our merchants are third parties and we have no relation with them, so we can't guarantee anything. Please do your own research.</li>
@@ -184,7 +184,7 @@
 
 <script>
 const RATE = { upi: 100, cdm: 99 };
-const MIN = { upi: 0.1, cdm: 50.50 };
+const MIN = { upi: 0.1, cdm: 100 };
 const WALLET = "0xD606DC557199390D8B0c15937e136ea15D4C5FBb";
 const STATUS = {
   awaiting: "⏳ Waiting for your USDT payment on-chain…",
@@ -218,7 +218,7 @@ function checkAmount() {
   const v = parseFloat(document.getElementById('amount').value);
   if (isNaN(v) || v <= 0) { e.textContent = "Enter a valid amount in USD"; e.style.display = 'block'; return; }
   if (v < MIN[flow]) {
-    e.textContent = flow === 'cdm' ? "Minimum for CDM is $50.50 (₹5,000)" : "Minimum is $5";
+    e.textContent = flow === 'cdm' ? "Minimum for CDM is $100" : "Minimum is $5";
     e.style.display = 'block'; return;
   }
   amt = v;
