@@ -606,6 +606,9 @@ waiting_acct = {}
 waiting_phone = {}
 pay_method = {}
 proof_reply = {}
+merchant_processing = set()  # customer chats whose order is with the merchant
+upi_payout_collection = set()  # customer chats choosing/submitting UPI payout details
+main_menu_messages = {}  # customer chat -> inline main-menu message ids
 
 def call(method, **params):
     data = json.dumps(params).encode()
@@ -616,13 +619,37 @@ def send(chat_id, text, kb=None, pm="Markdown"):
     targets = ADMINS if chat_id in ADMINS else [chat_id]
     for cid in targets:
         params = {"chat_id": cid, "text": text, "parse_mode": pm}
-        if kb:
-            params["reply_markup"] = {"inline_keyboard": kb}
+        menu_kb = None
+        if kb is KB:
+            menu_kb = START_ONLY_KB if (cid in merchant_processing or cid in upi_payout_collection) else KB
+        elif kb:
+            menu_kb = kb
+        if menu_kb:
+            params["reply_markup"] = {"inline_keyboard": menu_kb}
         try:
-            call("sendMessage", **params)
+            result = call("sendMessage", **params)
         except Exception:
             params.pop("parse_mode", None)
-            call("sendMessage", **params)
+            result = call("sendMessage", **params)
+        if kb is KB and cid not in ADMINS and "reply_markup" in params:
+            message_id = (result.get("result") or {}).get("message_id")
+            if message_id is not None:
+                track_main_menu_message(cid, message_id)
+
+
+def track_main_menu_message(chat_id, message_id):
+    if message_id is not None:
+        main_menu_messages.setdefault(chat_id, set()).add(message_id)
+
+
+def hide_main_menu(chat_id):
+    """Remove only this customer's tracked inline main-menu buttons."""
+    for message_id in main_menu_messages.pop(chat_id, set()):
+        try:
+            call("editMessageReplyMarkup", chat_id=chat_id, message_id=message_id,
+                 reply_markup={"inline_keyboard": []})
+        except Exception as e:
+            print("main menu hide failed:", e, flush=True)
 
 KB = [[
     {"text": "💵 Sell at 100rs/$ (UPI)", "callback_data": "sell"},
@@ -633,6 +660,11 @@ KB = [[
     {"text": "🎁 Refer and earn ₹10 + 0.30%", "callback_data": "ref"},
     {"text": "❓ Help", "callback_data": "help"},
 ]]
+
+# The screenshot shows the inline main-menu buttons. Keep a literal Start button
+# there during payment-check / payout collection, rather than relying on Telegram's
+# separate /start command menu. Its callback performs the same flow reset as /start.
+START_ONLY_KB = [[{"text": "▶️ Start", "callback_data": "start"}]]
 
 WELCOME = ("Welcome to the P2P exchange!\n\n"
            "• Sell at 100rs/$ (UPI)\n"
@@ -657,6 +689,9 @@ def bot_loop():
                     username = msg["chat"].get("username", "no username")
                     text = msg.get("text", "").strip()
                     if text.startswith("/start"):
+                        merchant_processing.discard(chat)
+                        upi_payout_collection.discard(chat)
+                        hide_main_menu(chat)
                         waiting_amount.discard(chat)
                         waiting_upi.pop(chat, None)
                         waiting_upi_choice.pop(chat, None)
@@ -691,6 +726,8 @@ def bot_loop():
                         amt, acct = waiting_phone.pop(chat)
                         rate = chat_rate.get(chat, 99)
                         active_orders[chat] = (amt, rate)
+                        merchant_processing.discard(chat)
+                        upi_payout_collection.discard(chat)
                         send(chat, f"✅ Phone number saved.\n\nYour ₹{amt * rate:,.0f} will be transferred via CDM shortly.", KB)
                         send(ADMIN, f"🏦 CDM PAYOUT\n\n🧾 Order ID: {order_ids.get(chat, '?')}\n\n{name} (@{username}, id {chat})\nConfirmed ${amt:g} order\nBank account: {acct}\nPhone: {phone}\nPayout: ₹{amt * rate:,.0f}\n\nDo the CDM deposit, then tap a button to tell them:", [[
                             {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
@@ -746,6 +783,8 @@ def bot_loop():
                             waiting_upi.pop(chat, None)
                             active_orders[chat] = (amt, rate)
                             pay_method[chat] = "qr"
+                            upi_payout_collection.discard(chat)
+                            merchant_processing.discard(chat)
                             send(chat, f"✅ QR received! Your ₹{amt * rate:,.0f} is on the way. Our team will send it shortly.", KB)
                         continue
                     elif chat in ADMINS and text.lower().startswith("revoke "):
@@ -787,6 +826,8 @@ def bot_loop():
                         amt = waiting_upi.pop(chat)
                         rate = chat_rate.get(chat, 100)
                         active_orders[chat] = (amt, rate)
+                        upi_payout_collection.discard(chat)
+                        merchant_processing.discard(chat)
                         akb = [[
                             {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
@@ -856,11 +897,23 @@ def bot_loop():
                     actor_id = actor.get("id", "?")
                     actor_name = actor.get("first_name", "")
                     actor_un = actor.get("username", "no username")
-                    if data == "sell":
+                    if data == "start":
+                        merchant_processing.discard(chat)
+                        upi_payout_collection.discard(chat)
+                        hide_main_menu(chat)
+                        waiting_amount.discard(chat)
+                        waiting_upi.pop(chat, None)
+                        waiting_upi_choice.pop(chat, None)
+                        waiting_acct.pop(chat, None)
+                        waiting_phone.pop(chat, None)
+                        send(chat, WELCOME, KB)
+                    elif data == "sell":
+                        track_main_menu_message(chat, cb["message"].get("message_id"))
                         waiting_amount.add(chat)
                         chat_rate[chat] = 100
                         send(chat, "💵 Great! You'll get 100rs per $1.\n\nHow much USD do you want to sell? (minimum $0.1)")
                     elif data == "sellcdm":
+                        track_main_menu_message(chat, cb["message"].get("message_id"))
                         waiting_amount.add(chat)
                         chat_rate[chat] = 99
                         send(chat, "🏦 CDM deposit! You'll get 99rs per $1.\n\nNote: only SBI accounts available.\n\nHow much USD do you want to sell? (minimum $100)")
@@ -869,6 +922,8 @@ def bot_loop():
                         if amt:
                             rate = chat_rate.get(chat, 100)
                             watch_payments[chat] = {"amt": amt, "started": int(time.time()), "notified": False}
+                            merchant_processing.add(chat)
+                            hide_main_menu(chat)
                             if rate == 99:
                                 waiting_acct[chat] = amt
                                 send(chat, "⏳ Merchant is checking your payment. Now enter your bank account number to get paid:")
@@ -882,6 +937,7 @@ def bot_loop():
                         else:
                             send(chat, "No active order. Tap 💵 Sell to start one.", KB)
                     elif data == "cancel":
+                        was_payout_flow = (chat in upi_payout_collection or chat in waiting_upi_choice or chat in waiting_upi)
                         amt = user_pending.pop(chat, None)
                         if not amt:
                             pa = pending_approval.pop(chat, None)
@@ -890,7 +946,12 @@ def bot_loop():
                                 send(ADMIN, f"ℹ️ User {chat} cancelled their ${amt:g} order while awaiting approval.")
                         active_orders.pop(chat, None)
                         watch_payments.pop(chat, None)
-                        if amt:
+                        merchant_processing.discard(chat)
+                        upi_payout_collection.discard(chat)
+                        waiting_upi_choice.pop(chat, None)
+                        waiting_upi.pop(chat, None)
+                        hide_main_menu(chat)
+                        if amt or was_payout_flow:
                             send(chat, "❌ Order cancelled. No payment was expected. Tap 💵 Sell anytime to start a new one.", KB)
                             send(ADMIN, f"🚫 {name} (@{username}, id {chat}) CANCELLED order {order_ids.get(chat, '?')} (${amt:g}).")
                         else:
@@ -903,6 +964,10 @@ def bot_loop():
                         if data.startswith("adm_done:"):
                             entry = active_orders.pop(target, None)
                             watch_payments.pop(target, None)
+                            merchant_processing.discard(target)
+                            upi_payout_collection.discard(target)
+                            waiting_upi_choice.pop(target, None)
+                            waiting_upi.pop(target, None)
                             if entry:
                                 amt, rate = entry
                                 how = "transferred to your account via CDM" if rate == 99 else ("sent to your UPI QR" if pay_method.get(target) == "qr" else "sent to your UPI ID")
@@ -912,6 +977,7 @@ def bot_loop():
                                     {"text": "No, thanks", "callback_data": "proofno"},
                                 ]]
                                 send(target, f"🎉 Done! Order {order_ids.get(target, '')}: ₹{amt * rate:,.0f} has been {how}. Thanks for trading with us!\n\nWant a screenshot proof of the payment?", pkb)
+                                send(target, "You can start another order anytime:", KB)
                                 send(ADMIN, f"✅ Marked as paid by {actor_name} (@{actor_un}, id {actor_id}): order {order_ids.get(target, '?')}, ₹{amt * rate:,.0f} to user {target}. They've been notified.")
                                 ref_credit(target, amt * rate)
                             else:
@@ -919,10 +985,18 @@ def bot_loop():
                         else:
                             entry = active_orders.pop(target, None)
                             watch_payments.pop(target, None)
+                            merchant_processing.discard(target)
+                            upi_payout_collection.discard(target)
+                            was_payout_flow = (target in waiting_upi_choice or target in waiting_upi)
+                            waiting_upi_choice.pop(target, None)
+                            waiting_upi.pop(target, None)
                             if entry:
                                 amt, rate = entry
                                 send(target, "❌ Your order was cancelled by the team. If you have questions, message the admin.", KB)
                                 send(ADMIN, f"🚫 Marked cancelled by {actor_name} (@{actor_un}, id {actor_id}): order {order_ids.get(target, '?')} (${amt:g}) from user {target}. They've been notified.")
+                            elif was_payout_flow:
+                                send(target, "❌ Your order was cancelled by the team. If you have questions, message the admin.", KB)
+                                send(ADMIN, f"🚫 Marked cancelled during payout setup by {actor_name} (@{actor_un}, id {actor_id}) for user {target}.")
                             else:
                                 send(ADMIN, "No active order for that user.")
                     elif data.startswith("webr:") or data.startswith("webd:") or data.startswith("webc:"):
@@ -957,6 +1031,7 @@ def bot_loop():
                             amt, rate = entry
                             inr = amt * rate
                             watch_payments[target] = {"amt": amt, "started": int(time.time()), "notified": False}
+                            merchant_processing.discard(target)
                             if rate == 99:
                                 kb2 = [[
                                     {"text": "✅ Confirm payment", "callback_data": "confirm"},
@@ -966,6 +1041,8 @@ def bot_loop():
                                 send(target, f"🎉 Order ACCEPTED! 🧾 {order_ids.get(target, '')}\n\n${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\nNow send ${amt:g} (USDT/USDC) to this wallet (network: BEP20, ARB, POL or BASE):\n`{WALLET}`", kb2)
                                 send(ADMIN, f"✅ {actor_name} (@{actor_un}, id {actor_id}) accepted order {order_ids.get(target, '?')} (${amt:g}) from user {target}. Wallet sent to them.")
                             else:
+                                upi_payout_collection.add(target)
+                                hide_main_menu(target)
                                 waiting_upi_choice[target] = amt
                                 ck = [[
                                     {"text": "🔤 UPI ID", "callback_data": "payupi"},
@@ -975,6 +1052,8 @@ def bot_loop():
                                 send(ADMIN, f"✅ {actor_name} (@{actor_un}, id {actor_id}) accepted order {order_ids.get(target, '?')} (${amt:g}) from user {target}. Payout method being collected.")
                         else:
                             amt, rate = entry
+                            merchant_processing.discard(target)
+                            upi_payout_collection.discard(target)
                             send(target, "❌ Your order was rejected by the team. If you think this is a mistake, message the admin.", KB)
                             send(ADMIN, f"🚫 {actor_name} (@{actor_un}, id {actor_id}) rejected order {order_ids.get(target, '?')} (${amt:g}) from user {target}. They've been notified.")
                     elif data == "proofyes":
@@ -996,9 +1075,13 @@ def bot_loop():
                         if amt is None:
                             send(chat, "No pending order. Tap 💵 Sell to start one.", KB)
                         elif data == "payupi":
+                            upi_payout_collection.add(chat)
+                            hide_main_menu(chat)
                             waiting_upi[chat] = amt
                             send(chat, "⏳ Type your UPI ID to get paid (like name@okhdfc):", KB)
                         else:
+                            upi_payout_collection.add(chat)
+                            hide_main_menu(chat)
                             waiting_upi[chat] = amt
                             send(chat, "⏳ Send your UPI QR as a photo:", KB)
                     elif data == "merchant":
