@@ -258,10 +258,16 @@ USDT = {
     "base":  "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",
 }
 USDC = {
-    "bep20": "0x8ac76a51cc950d9822d68b83fe1c97db239d6c",
+    # Binance-Peg USD Coin on BNB Smart Chain, verified on BscScan (18 decimals).
+    "bep20": "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
+    # Circle-native USDC addresses, as documented by Circle (6 decimals).
     "arb":   "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
-    "pol":   "0x3c499c542cef5e3811e1192ce54d1406e970125",
+    "pol":   "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
     "base":  "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+}
+TOKEN_DECIMALS = {
+    "USDT": {"bep20": 18, "arb": 6, "pol": 6, "base": 6},
+    "USDC": {"bep20": 18, "arb": 6, "pol": 6, "base": 6},
 }
 VALID_TOKENS={}
 for _n, _c in USDT.items():
@@ -276,9 +282,10 @@ TX_SEEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notifie
 _tx_seen = set()
 _tx_cursors = {}
 _tx_delivered = {}
+_tx_pending = {}
 _tx_lock = _th.Lock()
 def _tx_state_load():
-    global _tx_seen, _tx_cursors, _tx_delivered
+    global _tx_seen, _tx_cursors, _tx_delivered, _tx_pending
     try:
         with open(TX_SEEN_FILE) as f:
             state = json.load(f)
@@ -286,6 +293,7 @@ def _tx_state_load():
             _tx_seen = set(state.get("seen", []))
             _tx_cursors = {str(k): int(v) for k, v in state.get("cursors", {}).items()}
             _tx_delivered = {str(k): set(v) for k, v in state.get("delivered", {}).items()}
+            _tx_pending = {str(k): v for k, v in state.get("pending", {}).items()}
         elif isinstance(state, list):  # migrate the initial list format
             _tx_seen = set(state)
     except FileNotFoundError:
@@ -297,7 +305,8 @@ def _tx_state_save():
     tmp = TX_SEEN_FILE + ".tmp"
     with open(tmp, "w") as f:
         json.dump({"seen": sorted(_tx_seen), "cursors": _tx_cursors,
-                  "delivered": {k: sorted(v) for k, v in _tx_delivered.items()}}, f)
+                  "delivered": {k: sorted(v) for k, v in _tx_delivered.items()},
+                  "pending": _tx_pending}, f)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, TX_SEEN_FILE)
@@ -339,72 +348,117 @@ def _token_rows(net, contract):
 def _latest_block(net):
     return int(_rpc(net, "eth_blockNumber", []), 16)
 
+INITIAL_LOOKBACK_BLOCKS = 10000
+SCAN_RANGE_BLOCKS = 1999
+
+
 def scan_incoming_usdt():
-    """Read incoming USDT Transfer logs for the configured wallet on configured chains."""
+    """Read incoming USDT and USDC Transfer logs with bounded scans and chain isolation."""
     hits = []
     latest_blocks = {}
+    failures = {}
     to_topic = "0x" + WALLET_L[2:].rjust(64, "0")
-    for net, contract in USDT.items():
-        latest = _latest_block(net)
-        latest_blocks[net] = latest
-        with _tx_lock:
-            cursor = _tx_cursors.get(net)
-            if cursor is None:
-                # Begin from the current head; don't send a surprise back-catalog on first run.
-                _tx_cursors[net] = latest
-                _tx_state_save()
-                continue
-        start = cursor + 1
-        while start <= latest:
-            end = min(start + 1999, latest)
-            logs = _rpc(net, "eth_getLogs", [{"fromBlock": hex(start), "toBlock": hex(end),
-                         "address": contract, "topics": [TRANSFER_TOPIC, None, to_topic]}])
-            for log in logs:
-                tx_hash = log.get("transactionHash", "")
-                if not tx_hash:
-                    continue
-                try:
-                    value = int(log.get("data", "0x0"), 16) / (10 ** (18 if net == "bep20" else 6))
-                    block_num = int(log.get("blockNumber", "0x0"), 16)
-                    tx = _rpc(net, "eth_getTransactionByHash", [tx_hash]) or {}
-                    block = _rpc(net, "eth_getBlockByNumber", [hex(block_num), False]) or {}
-                    timestamp = int(block.get("timestamp", "0x0"), 16)
-                    confirmations = max(0, latest - block_num + 1)
-                except (ValueError, TypeError):
-                    continue
-                hits.append({"net": net, "amount": value, "tx": tx_hash,
-                             "from": tx.get("from", "unknown"), "to": WALLET,
-                             "timestamp": timestamp, "confirmations": confirmations,
-                             "token": contract, "block": block_num,
-                             "log_index": log.get("logIndex", "0x0")})
-            start = end + 1
-    return hits, latest_blocks
+    for net in CHAINS:
+        try:
+            latest = _latest_block(net)
+            with _tx_lock:
+                cursor = _tx_cursors.get(net)
+            start = max(0, latest - INITIAL_LOOKBACK_BLOCKS + 1) if cursor is None else cursor + 1
+            chain_hits = []
+            while start <= latest:
+                end = min(start + SCAN_RANGE_BLOCKS, latest)
+                for asset, contracts in (("USDT", USDT), ("USDC", USDC)):
+                    contract = contracts.get(net)
+                    if not contract:
+                        continue
+                    logs = _rpc(net, "eth_getLogs", [{"fromBlock": hex(start), "toBlock": hex(end),
+                                 "address": contract, "topics": [TRANSFER_TOPIC, None, to_topic]}])
+                    for log in logs:
+                        tx_hash = log.get("transactionHash", "")
+                        if not tx_hash:
+                            continue
+                        try:
+                            value = int(log.get("data", "0x0"), 16) / (10 ** TOKEN_DECIMALS[asset][net])
+                            block_num = int(log.get("blockNumber", "0x0"), 16)
+                            tx = _rpc(net, "eth_getTransactionByHash", [tx_hash]) or {}
+                            block = _rpc(net, "eth_getBlockByNumber", [hex(block_num), False]) or {}
+                            timestamp = int(block.get("timestamp", "0x0"), 16)
+                            confirmations = max(0, latest - block_num + 1)
+                        except (ValueError, TypeError):
+                            continue
+                        chain_hits.append({"net": net, "asset": asset, "amount": value, "tx": tx_hash,
+                                           "from": tx.get("from", "unknown"), "to": WALLET,
+                                           "timestamp": timestamp, "confirmations": confirmations,
+                                           "token": contract, "block": block_num,
+                                           "log_index": log.get("logIndex", "0x0")})
+                start = end + 1
+            hits.extend(chain_hits)
+            latest_blocks[net] = latest
+        except Exception as e:
+            failures[net] = e
+            print("incoming token scan failed:", net, e, flush=True)
+    return hits, latest_blocks, failures
+
 
 def _notify_incoming_transfer(hit):
     from datetime import datetime, timezone
     timestamp = datetime.fromtimestamp(hit["timestamp"], timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if hit["timestamp"] else "unknown"
     tx_url = EXPLORERS[hit["net"]] + hit["tx"]
-    text = ("⚠️ UNVERIFIED INCOMING USDT TRANSFER\n\n"
-            f"Chain: {hit['net'].upper()}\nAmount: {hit['amount']:g} USDT\n"
+    asset = hit.get("asset", "USDT")
+    text = (f"⚠️ UNVERIFIED INCOMING {asset} TRANSFER\n\n"
+            f"Chain: {hit['net'].upper()}\nAmount: {hit['amount']:g} {asset}\n"
             f"Sender: {hit['from']}\nRecipient: {hit['to']}\n"
             f"Timestamp: {timestamp}\nConfirmations: {hit['confirmations']}\n"
             f"Tx hash: {hit['tx']}\nExplorer: {tx_url}\n\n"
             "This transfer is not linked to or verified for any order. Please check manually.")
     delivery_key = hit["net"] + ":" + hit["tx"].lower() + ":" + str(hit["log_index"])
+    with _tx_lock:
+        _tx_delivered.setdefault(delivery_key, set())
+        _tx_pending.setdefault(delivery_key, hit)
+        try:
+            _tx_state_save()
+        except Exception as e:
+            _tx_pending.pop(delivery_key, None)
+            print("incoming transfer state save failed:", e, flush=True)
+            return False
+
+    all_delivered = True
     for cid in ADMINS:
         with _tx_lock:
-            delivered = _tx_delivered.setdefault(delivery_key, set())
-            if str(cid) in delivered:
+            if str(cid) in _tx_delivered.get(delivery_key, set()):
                 continue
         data = json.dumps({"chat_id": cid, "text": text}).encode()
         req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=data, headers={"Content-Type": "application/json"})
         try:
-            urllib.request.urlopen(req, timeout=15)
+            with urllib.request.urlopen(req, timeout=15) as response:
+                result = json.loads(response.read())
+            if not result.get("ok", False):
+                raise RuntimeError("Telegram API did not confirm delivery")
             with _tx_lock:
-                _tx_delivered[delivery_key].add(str(cid))
-                _tx_state_save()
+                _tx_delivered.setdefault(delivery_key, set()).add(str(cid))
+                try:
+                    _tx_state_save()
+                except Exception as e:
+                    _tx_delivered[delivery_key].discard(str(cid))
+                    print("incoming transfer delivery state save failed:", e, flush=True)
+                    all_delivered = False
         except Exception as e:
+            all_delivered = False
             print("incoming transfer notify failed:", e, flush=True)
+
+    with _tx_lock:
+        delivered = _tx_delivered.get(delivery_key, set())
+        if all(str(cid) in delivered for cid in ADMINS):
+            _tx_seen.add(delivery_key)
+            _tx_pending.pop(delivery_key, None)
+            try:
+                _tx_state_save()
+            except Exception as e:
+                _tx_seen.discard(delivery_key)
+                print("incoming transfer completion save failed:", e, flush=True)
+                return False
+            return True
+    return False
 
 def check_incoming(amt, since_ts=None):
     """Find incoming REAL USDT/USDC transfer to WALLET of >= amt."""
@@ -427,28 +481,38 @@ def check_incoming(amt, since_ts=None):
 def payment_watcher():
     while True:
         try:
-            hits, latest_blocks = scan_incoming_usdt()
+            hits, latest_blocks, scan_failures = scan_incoming_usdt()
+            with _tx_lock:
+                pending_hits = list(_tx_pending.values())
+            current_keys = {hit["net"] + ":" + hit["tx"].lower() + ":" + str(hit["log_index"]) for hit in hits}
+            for pending in pending_hits:
+                pending_key = pending["net"] + ":" + pending["tx"].lower() + ":" + str(pending["log_index"])
+                if pending_key not in current_keys:
+                    hits.append(pending)
+                    current_keys.add(pending_key)
+            retry_cursors = set()
             for hit in hits:
                 key = hit["net"] + ":" + hit["tx"].lower() + ":" + str(hit["log_index"])
                 with _tx_lock:
                     if key in _tx_seen:
                         continue
-                    _tx_seen.add(key)
-                    try:
-                        _tx_state_save()
-                    except Exception as e:
-                        _tx_seen.discard(key)
-                        print("tx state save failed; notification withheld:", e, flush=True)
-                        continue
-                _notify_incoming_transfer(hit)
-            # Persist only blocks whose complete log scan succeeded.
+                delivered = _notify_incoming_transfer(hit)
+                if not delivered:
+                    with _tx_lock:
+                        if key not in _tx_pending:
+                            retry_cursors.add(hit["net"])
+            # Advance only chains whose full scan succeeded and whose alerts
+            # are safely persisted as delivered or pending.
             with _tx_lock:
                 for net, latest in latest_blocks.items():
-                    _tx_cursors[net] = max(_tx_cursors.get(net, latest), latest)
+                    if net not in retry_cursors:
+                        _tx_cursors[net] = max(_tx_cursors.get(net, latest), latest)
                 _tx_state_save()
+            for net, error in scan_failures.items():
+                print("watcher will retry chain next cycle:", net, error, flush=True)
             hour = time.localtime().tm_hour
             if hour < 8 or hour >= 23:
-                time.sleep(60)
+                time.sleep(20)
                 continue
             for chat in list(watch_payments.keys()):
                 w = watch_payments[chat]
@@ -465,7 +529,7 @@ def payment_watcher():
                     notify(f"⚠️ No on-chain payment yet\n\n🧾 Order ID: {order_ids.get(chat, '')}\nUser: {chat}\nNothing matching ${w['amt']:g} arrived within 1 hour of confirm. They may not have sent.")
         except Exception as e:
             print("watch err:", e, flush=True)
-        time.sleep(60)
+        time.sleep(20)
 
 # ---- website orders (bot-like flow on p2px.onrender.com) ----
 WEB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_orders.json")
