@@ -2,7 +2,7 @@ import json, urllib.request, os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-ADMINS = [1817225234, 5538515530, 2025705698, 6728422105]
+ADMINS = [1817225234, 5538515530, 2025705698, 2105831616]
 ADMIN = ADMINS[0]
 SITE_RATE = {"upi": 100, "cdm": 99}
 
@@ -64,19 +64,6 @@ class H(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")) as f:
                 self._send(200, f.read())
-        elif self.path.startswith("/pay?"):
-            from urllib.parse import urlparse, parse_qs, quote
-            q = parse_qs(urlparse(self.path).query)
-            upi = q.get("u", [""])[0]
-            amt = q.get("a", [""])[0]
-            if upi:
-                link = f"upi://pay?pa={quote(upi)}"
-                if amt:
-                    link += f"&am={amt}"
-                link += "&cu=INR"
-                self._send(200, f'<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url={link}"><title>Opening payment app…</title></head><body style="font-family:sans-serif;text-align:center;padding-top:40vh"><p>Opening your payment app…</p><p><a href="{link}">Tap here if it does not open</a></p></body></html>')
-            else:
-                self._send(400, "missing upi")
         elif self.path == "/api/ping":
             self._send(200, json.dumps({"ok": True}))
         elif self.path.startswith("/api/status"):
@@ -151,7 +138,7 @@ class H(BaseHTTPRequestHandler):
                 if not upi_uri:
                     self._send(200, json.dumps({"ok": False, "err": "Could not read that QR. Make sure the whole QR is in the photo, or type your UPI ID instead."}))
                     return
-                from urllib.parse import urlparse as _up, parse_qs as _pq, quote as _q
+                from urllib.parse import urlparse as _up, parse_qs as _pq
                 qp = _pq(_up(upi_uri).query)
                 pay_upi = qp.get("pa", [""])[0]
                 order["upi"] = pay_upi
@@ -160,13 +147,11 @@ class H(BaseHTTPRequestHandler):
                 _web_save()
                 inr = order["inr"]
                 tkb = [[
-                    {"text": f"📲 Pay ₹{inr:,} (opens payment app)", "url": f"https://p2px.onrender.com/pay?u={_q(pay_upi)}&a={_q(str(inr))}"},
-                ], [
                     {"text": "✅ USDT received", "callback_data": f"webr:{oid}"},
                     {"text": "🚫 Cancel", "callback_data": f"webc:{oid}"},
                 ]]
                 try:
-                    call("sendMessage", chat_id=ADMIN, text=(f"🌐 WEBSITE ORDER #{oid} — QR received\nUPI: <code>{pay_upi}</code>\nPayout: ₹{inr:,}\n\nTap the pay button to open your payment app with the amount filled."), reply_markup={"inline_keyboard": tkb}, parse_mode="HTML")
+                    call("sendMessage", chat_id=ADMIN, text=(f"🌐 WEBSITE ORDER #{oid} — QR received\nUPI: <code>{pay_upi}</code>\nPayout: ₹{inr:,}\n\nPay the rupees using the uploaded QR, then tap ✅ when you see the USDT."), reply_markup={"inline_keyboard": tkb}, parse_mode="HTML")
                 except Exception as e:
                     print("qr admin notify failed:", e, flush=True)
                 self._send(200, json.dumps({"ok": True, "id": oid}))
@@ -199,15 +184,25 @@ ref_bal = {}           # referrer_id -> pending rupees
 ref_withdraw = {}      # referrer_id -> upi id pending request
 waiting_refw = set()
 REF_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "referrals.json")
-
 def _ref_save():
+    tmp_file = REF_FILE + ".tmp"
     try:
-        with open(REF_FILE, "w") as f:
-            json.dump({"referrals": {str(k): v for k, v in referrals.items()}, "seen": list(seen_users), "first": list(ref_paid_first),
-                       "bal": {str(k): v for k, v in ref_bal.items()},
-                       "wd": {str(k): v for k, v in ref_withdraw.items()}}, f)
+        data = {"referrals": {str(k): v for k, v in referrals.items()}, "seen": list(seen_users), "first": list(ref_paid_first),
+                "bal": {str(k): v for k, v in ref_bal.items()},
+                "wd": {str(k): v for k, v in ref_withdraw.items()}}
+        with open(tmp_file, "w") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_file, REF_FILE)
     except Exception as e:
+        try:
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
+        except OSError:
+            pass
         print("ref save failed:", e, flush=True)
+
 
 def _ref_load():
     global referrals, seen_users, ref_paid_first, ref_bal, ref_withdraw
@@ -219,8 +214,10 @@ def _ref_load():
         ref_paid_first = set(d.get("first", []))
         ref_bal = {int(k): float(v) for k, v in d.get("bal", {}).items()}
         ref_withdraw = {int(k): v for k, v in d.get("wd", {}).items()}
-    except Exception:
+    except FileNotFoundError:
         pass
+    except Exception as e:
+        print("ref load failed:", e, flush=True)
 
 _ref_load()
 
@@ -502,31 +499,38 @@ def bot_loop():
                         file_id = msg["photo"][-1]["file_id"]
                         send(chat, "⏳ One sec, checking your QR…")
                         upi_uri = decode_upi_qr(file_id)
-                        pay_note = "Scan the QR to pay, then tap a button to tell them:"
+                        from html import escape as _html_escape
+                        from urllib.parse import urlparse, parse_qs
                         akb = [[
                             {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]]
+                        detail_lines = []
+                        full_qr_details = ""
                         if upi_uri:
-                            from urllib.parse import urlparse, parse_qs, quote
                             qp = parse_qs(urlparse(upi_uri).query)
                             pay_upi = qp.get("pa", [""])[0]
                             pay_amt = qp.get("am", [str(int(amt * rate))])[0]
-                            web_pay = f"https://p2px.onrender.com/pay?u={quote(pay_upi)}&a={quote(pay_amt)}"
-                            pay_note = "Tap the pay button below to open your payment app with everything filled:"
-                            akb = [[
-                                {"text": f"📲 Pay ₹{amt * rate:,.0f} (opens payment app)", "url": web_pay},
-                            ], [
-                                {"text": "✅ Payment done", "callback_data": f"adm_done:{chat}"},
-                                {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
-                            ]]
+                            payee = qp.get("pn", [""])[0]
+                            currency = qp.get("cu", ["INR"])[0]
+                            note = qp.get("tn", [""])[0]
+                            detail_lines = [f"UPI ID: <code>{_html_escape(pay_upi)}</code>"]
+                            if payee:
+                                detail_lines.append(f"Payee: {_html_escape(payee)}")
+                            detail_lines.append(f"QR amount: {_html_escape(pay_amt)} {_html_escape(currency)}")
+                            if note:
+                                detail_lines.append(f"Note: {_html_escape(note)}")
+                            full_qr_details = f"\n\nFull QR payment details (copy if needed):\n<code>{_html_escape(upi_uri[:500])}</code>"
                         caption = (f"📸 UPI QR FROM USER ({'CDM' if rate == 99 else 'USDT'})\n\n{name} (@{username}, id {chat})\n"
                                    f"Confirmed ${amt:g} order\nPayout: ₹{amt * rate:,.0f}\n\n"
-                                   f"{pay_note}")
+                                   + "\n".join(detail_lines)
+                                   + "\n\nUse the UPI ID/details in your own payment app. Original QR image is attached.")
                         ok = True
                         for cid in ADMINS:
                             try:
-                                call("sendPhoto", chat_id=cid, photo=file_id, caption=caption, reply_markup={"inline_keyboard": akb})
+                                call("sendPhoto", chat_id=cid, photo=file_id, caption=caption, parse_mode="HTML", reply_markup={"inline_keyboard": akb})
+                                if full_qr_details:
+                                    call("sendMessage", chat_id=cid, text=f"Order {order_ids.get(chat, '?')}: {full_qr_details}", parse_mode="HTML")
                             except Exception as e:
                                 print("qr forward failed:", e, flush=True)
                                 ok = False
