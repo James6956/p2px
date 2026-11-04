@@ -43,6 +43,7 @@ def decode_upi_qr(file_id):
         return None
 
 def notify(text):
+    ok = True
     for cid in ADMINS:
         data = json.dumps({"chat_id": cid, "text": text}).encode()
         req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=data, headers={"Content-Type": "application/json"})
@@ -50,8 +51,8 @@ def notify(text):
             urllib.request.urlopen(req, timeout=15)
         except Exception as e:
             print("notify failed:", e, flush=True)
-            return False
-    return True
+            ok = False
+    return ok
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -239,25 +240,30 @@ def ref_credit(target, inr):
     except Exception:
         pass
 
-# ===== on-chain payment verification (Etherscan V2, one free key covers all chains) =====
+# ===== on-chain payment verification and incoming USDT notices =====
 import threading as _th
 WALLET_L = WALLET.lower()
 ES_KEY = os.environ.get("ETHERSCAN_KEY", "").strip()
 ES_V2 = "https://api.etherscan.io/v2/api"
 CHAINS = {"bep20": 56, "arb": 42161, "pol": 137, "base": 8453}
+# Routescan's Etherscan-compatible free API covers the configured chains without an API key.
+ROUTESCAN = "https://api.routescan.io/v2/network/mainnet/evm/{chainid}/etherscan/api"
+EXPLORERS = {"bep20": "https://bscscan.com/tx/", "arb": "https://arbiscan.io/tx/",
+             "pol": "https://polygonscan.com/tx/", "base": "https://basescan.org/tx/"}
 USDT = {
     "bep20": "0x55d398326f99059ff775485246999027b3197955",
-    "arb":   "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+    "arb":   "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
     "pol":   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
-    "base":  "0xfde4c96ca85d4fe8d2136fc38cdbae4fbc2574cd",
+    # This is the bridged USDT token the existing project checked on Base.
+    "base":  "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",
 }
 USDC = {
     "bep20": "0x8ac76a51cc950d9822d68b83fe1c97db239d6c",
-    "arb":   "0x912ce59144191c1204e64559fe8253a0e49e6548",
+    "arb":   "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
     "pol":   "0x3c499c542cef5e3811e1192ce54d1406e970125",
     "base":  "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
 }
-VALID_TOKENS = {}
+VALID_TOKENS={}
 for _n, _c in USDT.items():
     VALID_TOKENS.setdefault(_c.lower(), []).append(_n + " USDT")
 for _n, _c in USDC.items():
@@ -265,59 +271,201 @@ for _n, _c in USDC.items():
 watch_payments = {}     # chat -> {"amt": float, "started": unix ts, "notified": bool}
 verified_payments = {}  # chat -> result dict
 
+# Persistent high-water marks prevent rescanning and duplicate notices after restarts.
+TX_SEEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notified_usdt_txs.json")
+_tx_seen = set()
+_tx_cursors = {}
+_tx_delivered = {}
+_tx_lock = _th.Lock()
+def _tx_state_load():
+    global _tx_seen, _tx_cursors, _tx_delivered
+    try:
+        with open(TX_SEEN_FILE) as f:
+            state = json.load(f)
+        if isinstance(state, dict):
+            _tx_seen = set(state.get("seen", []))
+            _tx_cursors = {str(k): int(v) for k, v in state.get("cursors", {}).items()}
+            _tx_delivered = {str(k): set(v) for k, v in state.get("delivered", {}).items()}
+        elif isinstance(state, list):  # migrate the initial list format
+            _tx_seen = set(state)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print("tx state load failed:", e, flush=True)
+
+def _tx_state_save():
+    tmp = TX_SEEN_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"seen": sorted(_tx_seen), "cursors": _tx_cursors,
+                  "delivered": {k: sorted(v) for k, v in _tx_delivered.items()}}, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, TX_SEEN_FILE)
+
+_tx_state_load()
+
+# Public JSON-RPC endpoints. These are read-only and need no explorer API key.
+RPCS = {"bep20": "https://bsc-dataseed.bnbchain.org",
+        "arb": "https://arb1.arbitrum.io/rpc",
+        "pol": "https://polygon.drpc.org",
+        "base": "https://mainnet.base.org"}
+TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+def _rpc(net, method, params):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    req = urllib.request.Request(RPCS[net], data=body, headers={"Content-Type": "application/json", "User-Agent": "p2px/1.0"})
+    result = json.loads(urllib.request.urlopen(req, timeout=25).read())
+    if "error" in result:
+        raise RuntimeError(result["error"].get("message", "RPC error"))
+    return result["result"]
+
 def _get_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": "p2px/1.0"})
     return json.loads(urllib.request.urlopen(req, timeout=25).read())
 
-def check_incoming(amt, since_ts=None):
-    """Find an incoming REAL USDT/USDC transfer to WALLET of >= amt. 1 call per chain."""
-    for net, chainid in CHAINS.items():
-        url = (f"{ES_V2}?chainid={chainid}&module=account&action=tokentx"
-               f"&address={WALLET_L}&page=1&offset=100&sort=desc&apikey={ES_KEY}")
+def _token_rows(net, contract):
+    """Order-checker lookup via Etherscan when configured; incoming notices use public RPC logs."""
+    if not ES_KEY:
+        return []
+    params = f"module=account&action=tokentx&contractaddress={contract}&address={WALLET_L}&page=1&offset=100&sort=desc"
+    url = f"{ES_V2}?chainid={CHAINS[net]}&{params}&apikey={ES_KEY}"
+    try:
+        res = _get_json(url)
+        return res.get("result", []) if isinstance(res.get("result"), list) else []
+    except Exception as e:
+        print("etherscan lookup failed:", net, e, flush=True)
+        return []
+
+def _latest_block(net):
+    return int(_rpc(net, "eth_blockNumber", []), 16)
+
+def scan_incoming_usdt():
+    """Read incoming USDT Transfer logs for the configured wallet on configured chains."""
+    hits = []
+    latest_blocks = {}
+    to_topic = "0x" + WALLET_L[2:].rjust(64, "0")
+    for net, contract in USDT.items():
+        latest = _latest_block(net)
+        latest_blocks[net] = latest
+        with _tx_lock:
+            cursor = _tx_cursors.get(net)
+            if cursor is None:
+                # Begin from the current head; don't send a surprise back-catalog on first run.
+                _tx_cursors[net] = latest
+                _tx_state_save()
+                continue
+        start = cursor + 1
+        while start <= latest:
+            end = min(start + 1999, latest)
+            logs = _rpc(net, "eth_getLogs", [{"fromBlock": hex(start), "toBlock": hex(end),
+                         "address": contract, "topics": [TRANSFER_TOPIC, None, to_topic]}])
+            for log in logs:
+                tx_hash = log.get("transactionHash", "")
+                if not tx_hash:
+                    continue
+                try:
+                    value = int(log.get("data", "0x0"), 16) / (10 ** (18 if net == "bep20" else 6))
+                    block_num = int(log.get("blockNumber", "0x0"), 16)
+                    tx = _rpc(net, "eth_getTransactionByHash", [tx_hash]) or {}
+                    block = _rpc(net, "eth_getBlockByNumber", [hex(block_num), False]) or {}
+                    timestamp = int(block.get("timestamp", "0x0"), 16)
+                    confirmations = max(0, latest - block_num + 1)
+                except (ValueError, TypeError):
+                    continue
+                hits.append({"net": net, "amount": value, "tx": tx_hash,
+                             "from": tx.get("from", "unknown"), "to": WALLET,
+                             "timestamp": timestamp, "confirmations": confirmations,
+                             "token": contract, "block": block_num,
+                             "log_index": log.get("logIndex", "0x0")})
+            start = end + 1
+    return hits, latest_blocks
+
+def _notify_incoming_transfer(hit):
+    from datetime import datetime, timezone
+    timestamp = datetime.fromtimestamp(hit["timestamp"], timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if hit["timestamp"] else "unknown"
+    tx_url = EXPLORERS[hit["net"]] + hit["tx"]
+    text = ("⚠️ UNVERIFIED INCOMING USDT TRANSFER\n\n"
+            f"Chain: {hit['net'].upper()}\nAmount: {hit['amount']:g} USDT\n"
+            f"Sender: {hit['from']}\nRecipient: {hit['to']}\n"
+            f"Timestamp: {timestamp}\nConfirmations: {hit['confirmations']}\n"
+            f"Tx hash: {hit['tx']}\nExplorer: {tx_url}\n\n"
+            "This transfer is not linked to or verified for any order. Please check manually.")
+    delivery_key = hit["net"] + ":" + hit["tx"].lower() + ":" + str(hit["log_index"])
+    for cid in ADMINS:
+        with _tx_lock:
+            delivered = _tx_delivered.setdefault(delivery_key, set())
+            if str(cid) in delivered:
+                continue
+        data = json.dumps({"chat_id": cid, "text": text}).encode()
+        req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=data, headers={"Content-Type": "application/json"})
         try:
-            res = _get_json(url)
-        except Exception:
-            continue
-        rows = res.get("result")
-        if not isinstance(rows, list):
-            continue
-        for tx in rows[:100]:
-            if tx.get("to", "").lower() != WALLET_L:
-                continue
-            if tx.get("contractAddress", "").lower() not in VALID_TOKENS:
-                continue
-            if since_ts and int(tx.get("timeStamp") or 0) < since_ts:
-                continue
-            dec = int(tx.get("tokenDecimal") or 18)
-            val = int(tx.get("value") or 0) / (10 ** dec)
-            if val + 1e-6 >= amt:
-                return {"net": net, "amount": val, "tx": tx.get("hash", ""), "token": tx.get("contractAddress", "")}
+            urllib.request.urlopen(req, timeout=15)
+            with _tx_lock:
+                _tx_delivered[delivery_key].add(str(cid))
+                _tx_state_save()
+        except Exception as e:
+            print("incoming transfer notify failed:", e, flush=True)
+
+def check_incoming(amt, since_ts=None):
+    """Find incoming REAL USDT/USDC transfer to WALLET of >= amt."""
+    for net in CHAINS:
+        for contract in (USDT[net], USDC[net]):
+            for tx in _token_rows(net, contract):
+                if tx.get("to", "").lower() != WALLET_L:
+                    continue
+                if since_ts and int(tx.get("timeStamp") or 0) < since_ts:
+                    continue
+                try:
+                    dec = int(tx.get("tokenDecimal") or (18 if net == "bep20" else 6))
+                    val = int(tx.get("value") or 0) / (10 ** dec)
+                except (ValueError, TypeError):
+                    continue
+                if val + 1e-6 >= amt:
+                    return {"net": net, "amount": val, "tx": tx.get("hash", ""), "token": contract}
     return None
 
 def payment_watcher():
     while True:
         try:
+            hits, latest_blocks = scan_incoming_usdt()
+            for hit in hits:
+                key = hit["net"] + ":" + hit["tx"].lower() + ":" + str(hit["log_index"])
+                with _tx_lock:
+                    if key in _tx_seen:
+                        continue
+                    _tx_seen.add(key)
+                    try:
+                        _tx_state_save()
+                    except Exception as e:
+                        _tx_seen.discard(key)
+                        print("tx state save failed; notification withheld:", e, flush=True)
+                        continue
+                _notify_incoming_transfer(hit)
+            # Persist only blocks whose complete log scan succeeded.
+            with _tx_lock:
+                for net, latest in latest_blocks.items():
+                    _tx_cursors[net] = max(_tx_cursors.get(net, latest), latest)
+                _tx_state_save()
             hour = time.localtime().tm_hour
             if hour < 8 or hour >= 23:
                 time.sleep(60)
                 continue
-            if ES_KEY:
-                for chat in list(watch_payments.keys()):
-                    w = watch_payments[chat]
-                    if w.get("notified"):
-                        continue
-                    hit = check_incoming(w["amt"], since_ts=w.get("started"))
-                    if hit:
-                        hit["oid"] = order_ids.get(chat, "")
-                        verified_payments[chat] = hit
-                        w["notified"] = True
-                        notify(f"✅ PAYMENT VERIFIED ON-CHAIN\n\n🧾 Order ID: {hit['oid']}\nUser: {chat}\nAmount: {hit['amount']:g}\nChain: {hit['net'].upper()}\nToken: {hit['token'][:12]}...\nTx: {hit['tx'][:20]}...")
-                    elif time.time() - w["started"] > 3600 and not w.get("warned"):
-                        w["warned"] = True
-                        notify(f"⚠️ No on-chain payment yet\n\n🧾 Order ID: {order_ids.get(chat, '')}\nUser: {chat}\nNothing matching ${w['amt']:g} arrived within 1 hour of confirm. They may not have sent.")
+            for chat in list(watch_payments.keys()):
+                w = watch_payments[chat]
+                if w.get("notified"):
+                    continue
+                hit = check_incoming(w["amt"], since_ts=w.get("started"))
+                if hit:
+                    hit["oid"] = order_ids.get(chat, "")
+                    verified_payments[chat] = hit
+                    w["notified"] = True
+                    notify(f"✅ PAYMENT VERIFIED ON-CHAIN\n\n🧾 Order ID: {hit['oid']}\nUser: {chat}\nAmount: {hit['amount']:g}\nChain: {hit['net'].upper()}\nToken: {hit['token'][:12]}...\nTx: {hit['tx'][:20]}...")
+                elif time.time() - w["started"] > 3600 and not w.get("warned"):
+                    w["warned"] = True
+                    notify(f"⚠️ No on-chain payment yet\n\n🧾 Order ID: {order_ids.get(chat, '')}\nUser: {chat}\nNothing matching ${w['amt']:g} arrived within 1 hour of confirm. They may not have sent.")
         except Exception as e:
             print("watch err:", e, flush=True)
-        time.sleep(5)
+        time.sleep(60)
 
 # ---- website orders (bot-like flow on p2px.onrender.com) ----
 WEB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_orders.json")
@@ -506,7 +654,6 @@ def bot_loop():
                             {"text": "🚫 Order cancelled", "callback_data": f"adm_cancel:{chat}"},
                         ]]
                         detail_lines = []
-                        full_qr_details = ""
                         if upi_uri:
                             qp = parse_qs(urlparse(upi_uri).query)
                             pay_upi = qp.get("pa", [""])[0]
@@ -520,7 +667,6 @@ def bot_loop():
                             detail_lines.append(f"QR amount: {_html_escape(pay_amt)} {_html_escape(currency)}")
                             if note:
                                 detail_lines.append(f"Note: {_html_escape(note)}")
-                            full_qr_details = f"\n\nFull QR payment details (copy if needed):\n<code>{_html_escape(upi_uri[:500])}</code>"
                         caption = (f"📸 UPI QR FROM USER ({'CDM' if rate == 99 else 'USDT'})\n\n{name} (@{username}, id {chat})\n"
                                    f"Confirmed ${amt:g} order\nPayout: ₹{amt * rate:,.0f}\n\n"
                                    + "\n".join(detail_lines)
@@ -529,8 +675,6 @@ def bot_loop():
                         for cid in ADMINS:
                             try:
                                 call("sendPhoto", chat_id=cid, photo=file_id, caption=caption, parse_mode="HTML", reply_markup={"inline_keyboard": akb})
-                                if full_qr_details:
-                                    call("sendMessage", chat_id=cid, text=f"Order {order_ids.get(chat, '?')}: {full_qr_details}", parse_mode="HTML")
                             except Exception as e:
                                 print("qr forward failed:", e, flush=True)
                                 ok = False
