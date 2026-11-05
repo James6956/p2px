@@ -628,6 +628,18 @@ def main_menu_keyboard(chat_id):
     return None if order_flow_active(chat_id) else KB
 
 
+def send_payout_choice(chat_id, amount, inr, order_id):
+    """Start the customer's UPI ID/QR selection after a UPI order is accepted."""
+    upi_payout_collection.add(chat_id)
+    hide_main_menu(chat_id)
+    waiting_upi_choice[chat_id] = amount
+    keyboard = [[
+        {"text": "🔤 UPI ID", "callback_data": "payupi"},
+        {"text": "📷 QR", "callback_data": "payqr"},
+    ]]
+    send(chat_id, f"🎉 Order ACCEPTED! 🧾 {order_id}\n\n⏳ Merchant is sending your ₹{inr:,.0f}. How do you want to receive the rupees?", keyboard)
+
+
 def send(chat_id, text, kb=None, pm="Markdown"):
     targets = ADMINS if chat_id in ADMINS else [chat_id]
     for cid in targets:
@@ -1107,14 +1119,7 @@ def bot_loop():
                                 send(target, f"🎉 Order ACCEPTED! 🧾 {order_ids.get(target, '')}\n\n${amt:g} = ₹{inr:,.0f} at {rate:g}rs/$\n\nNow send ${amt:g} (USDT/USDC) to this wallet (network: BEP20, ARB, POL or BASE):\n`{WALLET}`", kb2)
                                 send(ADMIN, f"✅ {actor_name} (@{actor_un}, id {actor_id}) accepted order {order_ids.get(target, '?')} (${amt:g}) from user {target}. Wallet sent to them.")
                             else:
-                                upi_payout_collection.add(target)
-                                hide_main_menu(target)
-                                waiting_upi_choice[target] = amt
-                                ck = [[
-                                    {"text": "🔤 UPI ID", "callback_data": "payupi"},
-                                    {"text": "📷 QR", "callback_data": "payqr"},
-                                ]]
-                                send(target, f"🎉 Order ACCEPTED! 🧾 {order_ids.get(target, '')}\n\n⏳ Merchant is sending your ₹{inr:,.0f}. How do you want to receive the rupees?", ck)
+                                send_payout_choice(target, amt, inr, order_ids.get(target, ''))
                                 send(ADMIN, f"✅ {actor_name} (@{actor_un}, id {actor_id}) accepted order {order_ids.get(target, '?')} (${amt:g}) from user {target}. Payout method being collected.")
                         else:
                             amt, rate = entry
