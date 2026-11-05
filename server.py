@@ -643,10 +643,22 @@ def send(chat_id, text, kb=None, pm="Markdown"):
             # Suppress the menu text too, even if a handler bypasses
             # send_welcome() and passes the welcome payload directly.
             return
-        if in_flow:
+
+        if in_flow and menu_kb:
+            # ReplyKeyboardRemove is a reply keyboard, and Telegram does not
+            # let editMessageReplyMarkup convert that message into an inline
+            # keyboard. Clear any legacy persistent keyboard on a separate
+            # message, then send the requested flow buttons with the real text.
+            try:
+                call("sendMessage", chat_id=cid,
+                     text="Your order is active. Use the buttons below to continue.",
+                     reply_markup={"remove_keyboard": True})
+            except Exception as e:
+                print("stale reply keyboard removal failed:", e, flush=True)
+            params["reply_markup"] = {"inline_keyboard": menu_kb}
+        elif in_flow:
             # An older bot version may have left a persistent reply keyboard
-            # containing "▶️ Start" on the user's client. Suppressing our inline
-            # menu does not remove that keyboard, so explicitly clear it.
+            # containing "▶️ Start" on the user's client. Clear it during the flow.
             params["reply_markup"] = {"remove_keyboard": True}
         elif menu_kb:
             params["reply_markup"] = {"inline_keyboard": menu_kb}
@@ -656,18 +668,6 @@ def send(chat_id, text, kb=None, pm="Markdown"):
         except Exception:
             params.pop("parse_mode", None)
             result = call("sendMessage", **params)
-
-        # Telegram can't combine ReplyKeyboardRemove with an inline keyboard.
-        # Clear the stale reply keyboard first, then attach requested flow buttons
-        # to this same message so transaction controls remain available.
-        if in_flow and menu_kb:
-            message_id = (result.get("result") or {}).get("message_id")
-            if message_id is not None:
-                try:
-                    call("editMessageReplyMarkup", chat_id=cid, message_id=message_id,
-                         reply_markup={"inline_keyboard": menu_kb})
-                except Exception as e:
-                    print("flow inline buttons attach failed:", e, flush=True)
 
         if kb is KB and cid not in ADMINS and not in_flow and menu_kb:
             message_id = (result.get("result") or {}).get("message_id")
