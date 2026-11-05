@@ -375,19 +375,23 @@ def scan_incoming_usdt():
                                  "address": contract, "topics": [TRANSFER_TOPIC, None, to_topic]}])
                     for log in logs:
                         tx_hash = log.get("transactionHash", "")
-                        if not tx_hash:
+                        topics = log.get("topics") or []
+                        if not tx_hash or len(topics) < 3:
                             continue
                         try:
                             value = int(log.get("data", "0x0"), 16) / (10 ** TOKEN_DECIMALS[asset][net])
                             block_num = int(log.get("blockNumber", "0x0"), 16)
-                            tx = _rpc(net, "eth_getTransactionByHash", [tx_hash]) or {}
+                            sender = "0x" + topics[1][-40:]
+                            recipient = "0x" + topics[2][-40:]
+                            if recipient.lower() != WALLET_L:
+                                continue
                             block = _rpc(net, "eth_getBlockByNumber", [hex(block_num), False]) or {}
                             timestamp = int(block.get("timestamp", "0x0"), 16)
                             confirmations = max(0, latest - block_num + 1)
                         except (ValueError, TypeError):
                             continue
                         chain_hits.append({"net": net, "asset": asset, "amount": value, "tx": tx_hash,
-                                           "from": tx.get("from", "unknown"), "to": WALLET,
+                                           "from": sender, "to": recipient,
                                            "timestamp": timestamp, "confirmations": confirmations,
                                            "token": contract, "block": block_num,
                                            "log_index": log.get("logIndex", "0x0")})
@@ -615,26 +619,71 @@ def call(method, **params):
     req = urllib.request.Request(f"{API}/{method}", data=data, headers={"Content-Type": "application/json"})
     return json.loads(urllib.request.urlopen(req, timeout=60).read())
 
+def order_flow_active(chat_id):
+    return chat_id in merchant_processing or chat_id in upi_payout_collection
+
+
+def main_menu_keyboard(chat_id):
+    """Return the main inline menu only when this chat is outside active flows."""
+    return None if order_flow_active(chat_id) else KB
+
+
 def send(chat_id, text, kb=None, pm="Markdown"):
     targets = ADMINS if chat_id in ADMINS else [chat_id]
     for cid in targets:
         params = {"chat_id": cid, "text": text, "parse_mode": pm}
         menu_kb = None
         if kb is KB:
-            menu_kb = START_ONLY_KB if (cid in merchant_processing or cid in upi_payout_collection) else KB
+            menu_kb = main_menu_keyboard(cid)
         elif kb:
             menu_kb = kb
-        if menu_kb:
+
+        in_flow = order_flow_active(cid)
+        if in_flow and text == WELCOME:
+            # Suppress the menu text too, even if a handler bypasses
+            # send_welcome() and passes the welcome payload directly.
+            return
+        if in_flow:
+            # An older bot version may have left a persistent reply keyboard
+            # containing "▶️ Start" on the user's client. Suppressing our inline
+            # menu does not remove that keyboard, so explicitly clear it.
+            params["reply_markup"] = {"remove_keyboard": True}
+        elif menu_kb:
             params["reply_markup"] = {"inline_keyboard": menu_kb}
+
         try:
             result = call("sendMessage", **params)
         except Exception:
             params.pop("parse_mode", None)
             result = call("sendMessage", **params)
-        if kb is KB and cid not in ADMINS and "reply_markup" in params:
+
+        # Telegram can't combine ReplyKeyboardRemove with an inline keyboard.
+        # Clear the stale reply keyboard first, then attach requested flow buttons
+        # to this same message so transaction controls remain available.
+        if in_flow and menu_kb:
+            message_id = (result.get("result") or {}).get("message_id")
+            if message_id is not None:
+                try:
+                    call("editMessageReplyMarkup", chat_id=cid, message_id=message_id,
+                         reply_markup={"inline_keyboard": menu_kb})
+                except Exception as e:
+                    print("flow inline buttons attach failed:", e, flush=True)
+
+        if kb is KB and cid not in ADMINS and not in_flow and menu_kb:
             message_id = (result.get("result") or {}).get("message_id")
             if message_id is not None:
                 track_main_menu_message(cid, message_id)
+
+
+def send_welcome(chat_id):
+    """Do not interrupt an active order with the generic welcome/menu message."""
+    if order_flow_active(chat_id):
+        # Clear a persistent ReplyKeyboard left by an older bot version. A tap
+        # on its old Start button falls through here as ordinary text.
+        send(chat_id, "⏳ Your current order is still in progress. Use the buttons on your order message.")
+        return False
+    send(chat_id, WELCOME, KB)
+    return True
 
 
 def track_main_menu_message(chat_id, message_id):
@@ -661,10 +710,7 @@ KB = [[
     {"text": "❓ Help", "callback_data": "help"},
 ]]
 
-# The screenshot shows the inline main-menu buttons. Keep a literal Start button
-# there during payment-check / payout collection, rather than relying on Telegram's
-# separate /start command menu. Its callback performs the same flow reset as /start.
-START_ONLY_KB = [[{"text": "▶️ Start", "callback_data": "start"}]]
+# The main menu is intentionally suppressed in in-progress payment/payout flows.
 
 WELCOME = ("Welcome to the P2P exchange!\n\n"
            "• Sell at 100rs/$ (UPI)\n"
@@ -688,7 +734,21 @@ def bot_loop():
                     name = msg["chat"].get("first_name", "")
                     username = msg["chat"].get("username", "no username")
                     text = msg.get("text", "").strip()
-                    if text.startswith("/start"):
+                    if text == "▶️ Start":
+                        # This was the label of the old persistent reply-keyboard
+                        # button, not a bot command. Consume it during either
+                        # active flow so it cannot trigger the generic welcome.
+                        if order_flow_active(chat):
+                            send(chat, "⏳ Your current order is still in progress. Use the buttons on your order message.")
+                        else:
+                            send_welcome(chat)
+                    elif text.startswith("/start"):
+                        # Older bot versions exposed a persistent ReplyKeyboard
+                        # Start button. Do not let that stale button interrupt
+                        # or reset an order that is already in progress.
+                        if order_flow_active(chat):
+                            send(chat, "⏳ Your current order is still in progress. Please finish or cancel it first.")
+                            continue
                         merchant_processing.discard(chat)
                         upi_payout_collection.discard(chat)
                         hide_main_menu(chat)
@@ -887,7 +947,7 @@ def bot_loop():
                     elif text.startswith("/help"):
                         send(chat, "Tap 💵 Sell to start a trade. For anything else message the admin.", KB)
                     else:
-                        send(chat, WELCOME, KB)
+                        send_welcome(chat)
                 elif cb:
                     chat = cb["message"]["chat"]["id"]
                     name = cb["message"]["chat"].get("first_name", "")
@@ -898,6 +958,12 @@ def bot_loop():
                     actor_name = actor.get("first_name", "")
                     actor_un = actor.get("username", "no username")
                     if data == "start":
+                        # Ignore a stale legacy Start button during an active flow.
+                        # The /start command remains the explicit way to reset it.
+                        if order_flow_active(chat):
+                            call("answerCallbackQuery", callback_query_id=cb["id"],
+                                 text="Finish or cancel your current order first")
+                            continue
                         merchant_processing.discard(chat)
                         upi_payout_collection.discard(chat)
                         hide_main_menu(chat)
