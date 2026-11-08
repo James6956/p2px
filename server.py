@@ -184,23 +184,12 @@ ref_paid_first = set()
 ref_bal = {}           # referrer_id -> pending rupees
 ref_withdraw = {}      # referrer_id -> upi id pending request
 waiting_refw = set()
-# Render's local filesystem is ephemeral unless a persistent disk is mounted.
-# Set P2PX_DATA_DIR to the persistent mount path (for example, /var/data).
+# Use local JSON storage by default, including on Render Free.
+# Render Free storage is ephemeral, so referral data can be lost on restart/redeploy.
 _REF_DEFAULT_DIR = os.path.dirname(os.path.abspath(__file__))
 _P2PX_DATA_DIR = os.environ.get("P2PX_DATA_DIR", "").strip()
-_RENDER_DEPLOY = os.environ.get("RENDER", "").strip().lower() in {"1", "true", "yes"}
-# Never silently keep referral balances on Render's ephemeral application disk.
-# The configured path must already be a mounted, writable persistent disk.
-if _RENDER_DEPLOY and not _P2PX_DATA_DIR:
-    raise RuntimeError("P2PX_DATA_DIR must point to a mounted Render persistent disk (for example, /var/data)")
 REF_DATA_DIR = os.path.abspath(_P2PX_DATA_DIR or _REF_DEFAULT_DIR)
-if _RENDER_DEPLOY:
-    if not os.path.isdir(REF_DATA_DIR):
-        raise RuntimeError(f"P2PX_DATA_DIR is not an available mounted directory: {REF_DATA_DIR}")
-    if not os.access(REF_DATA_DIR, os.W_OK):
-        raise RuntimeError(f"P2PX_DATA_DIR is not writable: {REF_DATA_DIR}")
-else:
-    os.makedirs(REF_DATA_DIR, exist_ok=True)
+os.makedirs(REF_DATA_DIR, exist_ok=True)
 REF_FILE = os.path.join(REF_DATA_DIR, "referrals.json")
 _LEGACY_REF_FILE = os.path.join(_REF_DEFAULT_DIR, "referrals.json")
 def _ref_save():
