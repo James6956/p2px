@@ -330,35 +330,73 @@ def _tx_state_save():
 _tx_state_load()
 
 # Public JSON-RPC endpoints. These are read-only and need no explorer API key.
-RPCS = {"bep20": "https://bsc-dataseed.bnbchain.org",
-        "arb": "https://arb1.arbitrum.io/rpc",
-        "pol": "https://polygon.drpc.org",
-        "base": "https://mainnet.base.org"}
+RPCS = {"bep20": ["https://bsc-rpc.publicnode.com", "https://bsc-dataseed.bnbchain.org"],
+        "arb": ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"],
+        "pol": ["https://polygon-bor-rpc.publicnode.com", "https://polygon.drpc.org"],
+        "base": ["https://base-rpc.publicnode.com", "https://mainnet.base.org"]}
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
 def _rpc(net, method, params):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
-    req = urllib.request.Request(RPCS[net], data=body, headers={"Content-Type": "application/json", "User-Agent": "p2px/1.0"})
-    result = json.loads(urllib.request.urlopen(req, timeout=25).read())
-    if "error" in result:
-        raise RuntimeError(result["error"].get("message", "RPC error"))
-    return result["result"]
+    last = None
+    for url in RPCS[net]:
+        try:
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "User-Agent": "p2px/1.0"})
+            result = json.loads(urllib.request.urlopen(req, timeout=25).read())
+            if "error" in result:
+                raise RuntimeError(result["error"].get("message", "RPC error"))
+            return result["result"]
+        except Exception as e:
+            last = e
+    raise last
 
 def _get_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": "p2px/1.0"})
     return json.loads(urllib.request.urlopen(req, timeout=25).read())
 
+LOOKBACK = {"bep20": 10000, "arb": 10000, "pol": 10000, "base": 10000}
+
+def _rpc_token_rows(net, contract):
+    """Keyless fallback: recent incoming Transfer logs from public RPC, shaped like Etherscan tokentx rows."""
+    latest = _latest_block(net)
+    to_topic = "0x" + WALLET_L[2:].rjust(64, "0")
+    start = max(0, latest - LOOKBACK[net])
+    rows = []
+    ts_cache = {}
+    while start <= latest:
+        end = min(start + SCAN_RANGE_BLOCKS, latest)
+        logs = _rpc(net, "eth_getLogs", [{"fromBlock": hex(start), "toBlock": hex(end),
+                     "address": contract, "topics": [TRANSFER_TOPIC, None, to_topic]}])
+        for lg in logs:
+            bn = lg.get("blockNumber", "0x0")
+            if bn not in ts_cache:
+                blk = _rpc(net, "eth_getBlockByNumber", [bn, False]) or {}
+                ts_cache[bn] = int(blk.get("timestamp", "0x0"), 16)
+            rows.append({"to": WALLET_L, "timeStamp": ts_cache[bn], "hash": lg.get("transactionHash", ""),
+                         "value": int(lg.get("data", "0x0"), 16),
+                         "tokenDecimal": TOKEN_DECIMALS["USDT" if contract.lower() == USDT[net].lower() else "USDC"][net]})
+        start = end + 1
+    return rows
+
 def _token_rows(net, contract):
-    """Order-checker lookup via Etherscan when configured; incoming notices use public RPC logs."""
-    if not ES_KEY:
-        return []
-    params = f"module=account&action=tokentx&contractaddress={contract}&address={WALLET_L}&page=1&offset=100&sort=desc"
-    url = f"{ES_V2}?chainid={CHAINS[net]}&{params}&apikey={ES_KEY}"
+    """Order-checker lookup: Etherscan when the key works, otherwise public RPC logs (no key needed)."""
+    global ES_KEY
+    if ES_KEY:
+        params = f"module=account&action=tokentx&contractaddress={contract}&address={WALLET_L}&page=1&offset=100&sort=desc"
+        url = f"{ES_V2}?chainid={CHAINS[net]}&{params}&apikey={ES_KEY}"
+        try:
+            res = _get_json(url)
+            if isinstance(res.get("result"), list):
+                return res["result"]
+            if "api key" in str(res.get("result", "")).lower():
+                print("etherscan key rejected, using public RPC instead", flush=True)
+                ES_KEY = ""
+        except Exception as e:
+            print("etherscan lookup failed:", net, e, flush=True)
     try:
-        res = _get_json(url)
-        return res.get("result", []) if isinstance(res.get("result"), list) else []
+        return _rpc_token_rows(net, contract)
     except Exception as e:
-        print("etherscan lookup failed:", net, e, flush=True)
+        print("rpc lookup failed:", net, e, flush=True)
         return []
 
 def _latest_block(net):
@@ -599,15 +637,10 @@ _th.Thread(target=web_watch, daemon=True).start()
 
 
 def _boot_check():
-    if not ES_KEY:
-        notify("⚠️ payment checker OFFLINE — ETHERSCAN_KEY not set on render. It will silently do nothing until the key is added.")
-        return
     try:
-        res = _get_json(f"{ES_V2}?chainid=137&module=account&action=tokentx&contractaddress={USDT['pol']}&address={WALLET_L}&page=1&offset=1&sort=desc&apikey={ES_KEY}")
-        if isinstance(res.get("result"), list):
-            notify("✅ payment checker online — key works, watching all 4 chains")
-        else:
-            notify(f"❌ payment checker key problem: {str(res.get('result') or res.get('message'))[:80]}")
+        for net in CHAINS:
+            _latest_block(net)
+        notify("✅ payment checker online, watching all 4 chains via public RPC (no explorer key needed)")
     except Exception as e:
         notify(f"❌ payment checker error: {str(e)[:80]}")
 
